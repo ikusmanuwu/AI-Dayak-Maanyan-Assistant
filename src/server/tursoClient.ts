@@ -1,4 +1,5 @@
 import { createClient, Client } from "@libsql/client";
+import { COMPREHENSIVE_MAANYAN_VOCAB } from "../data/comprehensiveVocab";
 
 let client: Client | null = null;
 let isTursoConnected = false;
@@ -137,14 +138,30 @@ export async function initTursoDatabase(): Promise<{ success: boolean; message: 
       { term: "puang", meaning: "tidak / bukan", category: "Partikel Penyangkal", example: "puang kuman (belum / tidak makan)" }
     ];
 
-    const statements = allCoreVocab.map(v => ({
+    // Gabungkan dengan 230+ kosakata dari input kamus komprehensif
+    const mergedVocab = [
+      ...allCoreVocab,
+      ...COMPREHENSIVE_MAANYAN_VOCAB
+    ];
+
+    const statements = mergedVocab.map(v => ({
       sql: `INSERT OR IGNORE INTO learned_vocab (term_maanyan, meaning_indonesian, category, example_sentence, contributor)
             VALUES (?, ?, ?, ?, ?);`,
-      args: [v.term.toLowerCase(), v.meaning.toLowerCase(), v.category, v.example, "Knowledge Base Inti"]
+      args: [
+        v.term.toLowerCase().trim(),
+        v.meaning.toLowerCase().trim(),
+        v.category || "Kosakata Pengguna",
+        v.example || `${v.term} artinya ${v.meaning}`,
+        "Pengguna Telegram / Knowledge Base"
+      ]
     }));
 
-    // Eksekusi batch sync kosakata
-    await turso.batch(statements);
+    // Eksekusi batch sync kosakata secara bertahap (chunk 80 statement per batch agar aman)
+    const chunkSize = 80;
+    for (let i = 0; i < statements.length; i += chunkSize) {
+      const chunk = statements.slice(i, i + chunkSize);
+      await turso.batch(chunk);
+    }
 
     // Sync juga aturan tata bahasa inti ke learned_rules
     const coreRules = [
@@ -172,6 +189,26 @@ export async function initTursoDatabase(): Promise<{ success: boolean; message: 
         title: "Ungkapan Idiomatis 'Puang Ka'itung'",
         description: "Puang berarti tidak/bukan. 'Puang ka'itung' secara harfiah tidak terhitung/terpikirkan, bermakna 'lupa'.",
         example: "puang ka'itung ngaran nu (aku lupa namamu)"
+      },
+      {
+        title: "Peribahasa 'Tetek Meaw Hang Papuru Tungun'",
+        description: "Peribahasa klasik Ma'anyan yang menasihati agar jangan mencela orang lain padahal diri sendiri memiliki kelemahan atau melakukan hal yang sama.",
+        example: "Ada kalina: tetek meaw hang papuru tungun"
+      },
+      {
+        title: "Partikel Penyangkal dan Negasi Khas: 'Ang', 'Puang', 'Maka', 'Tuma'",
+        description: "Dalam percakapan dan dialek Dayak Ma'anyan, negasi dapat menggunakan 'puang' (formal/umum), 'ang' (percakapan cepat/logat daerah), 'maka' (singkat), atau 'tuma' (penolakan tegas).",
+        example: "puang kuman (belum makan), ang sarut (tidak apa-apa), tuma hakun (tidak mau sama sekali)"
+      },
+      {
+        title: "Falsafah Persatuan 'Isa Takewan Isa Supak'",
+        description: "Falsafah luhur suku Dayak Ma'anyan yang berarti: 'Walaupun kita tercerai berai atau terpisah-pisah, namun kita tetap satu hati dan satu tujuan'.",
+        example: "Isa takewan isa supak"
+      },
+      {
+        title: "Sistem Kekerabatan & Sapaan Hormat Ma'anyan",
+        description: "Panggilan kekerabatan memiliki tingkatan spesifik: Amah/Ambah (ayah), Ineh (ibu), Kakah (kakek), Itak/Nini (nenek), Dueh Upu (paman sulung/kakak ayah), Dueh Wawei (bibi sulung), Busu/Mama (paman termuda), Yaya/Tutu (tante muda), Umpu (cucu), Daup (ipar laki-laki), Iwan (ipar perempuan), Dawari (sepupu/sahabat dekat), Pulaksanai (saudara kandung).",
+        example: "dawari ku, busu ku, dueh upu"
       }
     ];
 

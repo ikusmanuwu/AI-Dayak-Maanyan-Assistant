@@ -1,6 +1,7 @@
 import { VocabItem } from '../types';
+import { COMPREHENSIVE_MAANYAN_VOCAB } from './comprehensiveVocab';
 
-export const INITIAL_VOCABULARY: VocabItem[] = [
+const BASE_VOCAB: VocabItem[] = [
   { term: "nguta / kuman", meaning: "makan", category: "Kosakata Dasar", notes: "kuman dan nguta sering digunakan bergantian untuk makan" },
   { term: "nahi", meaning: "nasi", category: "Kosakata Dasar", notes: "makanan pokok" },
   { term: "waday", meaning: "kue / kudapan", category: "Kosakata Dasar", notes: "kue tradisional atau cemilan khas" },
@@ -37,6 +38,26 @@ export const INITIAL_VOCABULARY: VocabItem[] = [
   { term: "bapaner", meaning: "bicara / mengajar / bercakap", category: "Aktivitas & Waktu", notes: "berbicara dalam bahasa Ma'anyan" },
   { term: "luput", meaning: "selesai / usai", category: "Kata Kerja / Kondisi", notes: "pekerjaan atau kondisi telah usai" }
 ];
+
+// Gabungkan kamus dasar dengan seluruh 230+ kata yang diajarkan pengguna
+const userVocabItems: VocabItem[] = COMPREHENSIVE_MAANYAN_VOCAB.map(v => ({
+  term: v.term,
+  meaning: v.meaning,
+  category: v.category || "Kosakata Pengguna",
+  notes: v.example || `Artinya: ${v.meaning}`
+}));
+
+// Filter duplikat berdasarkan term
+const seenTerms = new Set<string>();
+export const INITIAL_VOCABULARY: VocabItem[] = [];
+
+for (const item of [...BASE_VOCAB, ...userVocabItems]) {
+  const key = item.term.toLowerCase().trim();
+  if (!seenTerms.has(key)) {
+    seenTerms.add(key);
+    INITIAL_VOCABULARY.push(item);
+  }
+}
 
 export const SAMPLE_QUERIES = [
   "Apa arti kuman dan nguta?",

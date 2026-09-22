@@ -19,6 +19,7 @@ import {
   fetchAllRulesFromTurso,
   insertRuleToTurso
 } from "./src/server/tursoClient";
+import { COMPREHENSIVE_MAANYAN_VOCAB } from "./src/data/comprehensiveVocab";
 
 const app = express();
 const PORT = 3000;
@@ -43,23 +44,30 @@ function getAiClient(): GoogleGenAI {
   return aiClient;
 }
 
-// Helper generator dengan automatic model fallback (3.1-flash-lite -> 2.5-flash)
+// Helper generator dengan resilient model cascade (gemini-3.6-flash -> gemini-3.5-flash -> gemini-3-flash-preview)
 async function generateGeminiContent(contents: any, config: any) {
   const ai = getAiClient();
-  try {
-    return await ai.models.generateContent({
-      model: "gemini-3.1-flash-lite",
-      contents,
-      config
-    });
-  } catch (err: any) {
-    console.warn("Model gemini-3.1-flash-lite mengalami high demand/unavailable, fallback ke gemini-2.5-flash:", err?.message);
-    return await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents,
-      config
-    });
+  const modelsToTry = [
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-3-flash-preview",
+    "gemini-flash-latest"
+  ];
+
+  let lastError: any = null;
+  for (const model of modelsToTry) {
+    try {
+      return await ai.models.generateContent({
+        model,
+        contents,
+        config
+      });
+    } catch (err: any) {
+      lastError = err;
+      console.warn(`[Gemini API] Model ${model} gagal (${err?.status || err?.message}). Mencoba model berikutnya...`);
+    }
   }
+  throw lastError || new Error("Semua model Gemini sedang tidak dapat dihubungi.");
 }
 
 // In-Memory Database untuk Web Simulator (Sinkron dengan Turso / SQLite logic di Python)
@@ -138,7 +146,13 @@ const CORE_VOCABULARY = [
   { term: "hanyu", meaning: "kamu / engkau", category: "Kata Ganti", notes: "orang kedua tunggal" },
   { term: "hanye", meaning: "dia / ia", category: "Kata Ganti", notes: "orang ketiga tunggal" },
   { term: "kami / ite", meaning: "kami / kita", category: "Kata Ganti", notes: "orang pertama jamak" },
-  { term: "ere / kere", meaning: "mereka", category: "Kata Ganti", notes: "orang ketiga jamak" }
+  { term: "ere / kere", meaning: "mereka", category: "Kata Ganti", notes: "orang ketiga jamak" },
+  ...COMPREHENSIVE_MAANYAN_VOCAB.map(v => ({
+    term: v.term,
+    meaning: v.meaning,
+    category: v.category || "Kosakata Pengguna",
+    notes: v.example || `Artinya: ${v.meaning}`
+  }))
 ];
 
 function buildSystemInstruction(mode: "chat" | "latihan"): string {

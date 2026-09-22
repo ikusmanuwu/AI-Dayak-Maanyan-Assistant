@@ -56,20 +56,27 @@ export async function startTelegramPoller(
   botStatus.error = undefined;
 
   async function callGemini(contents: any, config: any) {
-    try {
-      return await aiClient.models.generateContent({
-        model: "gemini-3.1-flash-lite",
-        contents,
-        config
-      });
-    } catch (e: any) {
-      console.warn("[Telegram Poller] gemini-3.1-flash-lite busy, fallback ke gemini-2.5-flash:", e?.message);
-      return await aiClient.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents,
-        config
-      });
+    const modelsToTry = [
+      "gemini-3.6-flash",
+      "gemini-3.5-flash",
+      "gemini-3-flash-preview",
+      "gemini-flash-latest"
+    ];
+
+    let lastError: any = null;
+    for (const model of modelsToTry) {
+      try {
+        return await aiClient.models.generateContent({
+          model,
+          contents,
+          config
+        });
+      } catch (e: any) {
+        lastError = e;
+        console.warn(`[Telegram Poller] Model ${model} gagal (${e?.status || e?.message}). Mencoba model cadangan...`);
+      }
     }
+    throw lastError || new Error("Semua model Gemini tidak dapat dijangkau.");
   }
 
   console.log(`[Telegram Poller] Memulai long polling untuk @${botStatus.botUsername || "bot"}...`);
@@ -114,20 +121,39 @@ export async function startTelegramPoller(
               const isLatihan = text.toLowerCase().includes("/latihan") || text.toLowerCase().includes("latihan");
               const mode = isLatihan ? "latihan" : "chat";
 
-              // Check auto-learning
-              const triggers = ["artinya", "artian", "harusnya", "salah", "koreksi", "beda", "maanyan", "kata", "bukan", "adalah"];
+              // Check auto-learning (bisa single term atau bulk baris kata)
+              const triggers = ["artinya", "artian", "harusnya", "salah", "koreksi", "beda", "maanyan", "kata", "bukan", "adalah", "="];
               const hasTrigger = triggers.some(t => text.toLowerCase().includes(t));
 
-              if (hasTrigger && aiClient) {
-                try {
-                  const detectionPrompt = `Analisis apakah pesan Telegram ini mengajarkan kosakata baru atau mengoreksi kata Dayak Ma'anyan:\n"${text}"\nKembalikan HANYA format JSON:\n{\n  "is_teaching": true/false,\n  "term": "kata ma'anyan atau kosongkan",\n  "meaning": "arti indonesia atau kosongkan",\n  "category": "kategori",\n  "example": "contoh kalimat jika ada"\n}`;
-                  const det = await callGemini(detectionPrompt, { responseMimeType: "application/json", temperature: 0.1 });
-                  const parsed = JSON.parse(det.text?.trim() || "{}");
-                  if (parsed.is_teaching && parsed.term && parsed.meaning) {
-                    await onLearn(parsed.term, parsed.meaning, parsed.category || "Kosakata Baru (Telegram)", parsed.example || "");
+              if (hasTrigger) {
+                // 1. Coba deteksi cepat pola baris: "<kata> artinya <arti>" atau "<kata> = <arti>"
+                const lines = text.split("\n").map((l: string) => l.trim()).filter(Boolean);
+                let learnedAnyFromLines = false;
+
+                for (const line of lines) {
+                  const match = line.match(/^([a-zA-Z0-9'`\-~\s]+?)\s+(?:artinya|=|maknanya|yaitu)\s+(.+)$/i);
+                  if (match && match[1] && match[2]) {
+                    const term = match[1].trim();
+                    const meaning = match[2].trim();
+                    if (term.length > 1 && meaning.length > 1 && !term.toLowerCase().startsWith("kata baru")) {
+                      await onLearn(term, meaning, "Kosakata Baru (Telegram)", `${term} artinya ${meaning}`);
+                      learnedAnyFromLines = true;
+                    }
                   }
-                } catch (e) {
-                  console.warn("[Telegram Auto-Learn Error]", e);
+                }
+
+                // 2. Jika bukan pola baris sederhana, gunakan deteksi AI Gemini
+                if (!learnedAnyFromLines && aiClient) {
+                  try {
+                    const detectionPrompt = `Analisis apakah pesan Telegram ini mengajarkan kosakata baru atau mengoreksi kata Dayak Ma'anyan:\n"${text}"\nKembalikan HANYA format JSON:\n{\n  "is_teaching": true/false,\n  "term": "kata ma'anyan atau kosongkan",\n  "meaning": "arti indonesia atau kosongkan",\n  "category": "kategori",\n  "example": "contoh kalimat jika ada"\n}`;
+                    const det = await callGemini(detectionPrompt, { responseMimeType: "application/json", temperature: 0.1 });
+                    const parsed = JSON.parse(det.text?.trim() || "{}");
+                    if (parsed.is_teaching && parsed.term && parsed.meaning) {
+                      await onLearn(parsed.term, parsed.meaning, parsed.category || "Kosakata Baru (Telegram)", parsed.example || "");
+                    }
+                  } catch (e) {
+                    console.warn("[Telegram Auto-Learn Error]", e);
+                  }
                 }
               }
 
