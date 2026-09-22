@@ -9,6 +9,16 @@ import {
   getBotStatus,
   stopTelegramPoller
 } from "./src/server/telegramPoller";
+import {
+  initTursoDatabase,
+  getTursoConfig,
+  getTursoClient,
+  fetchAllVocabFromTurso,
+  insertVocabToTurso,
+  deleteVocabFromTurso,
+  fetchAllRulesFromTurso,
+  insertRuleToTurso
+} from "./src/server/tursoClient";
 
 const app = express();
 const PORT = 3000;
@@ -33,7 +43,26 @@ function getAiClient(): GoogleGenAI {
   return aiClient;
 }
 
-// In-Memory Database untuk Web Simulator (Sinkron dengan SQLite logic di Python)
+// Helper generator dengan automatic model fallback (3.1-flash-lite -> 2.5-flash)
+async function generateGeminiContent(contents: any, config: any) {
+  const ai = getAiClient();
+  try {
+    return await ai.models.generateContent({
+      model: "gemini-3.1-flash-lite",
+      contents,
+      config
+    });
+  } catch (err: any) {
+    console.warn("Model gemini-3.1-flash-lite mengalami high demand/unavailable, fallback ke gemini-2.5-flash:", err?.message);
+    return await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents,
+      config
+    });
+  }
+}
+
+// In-Memory Database untuk Web Simulator (Sinkron dengan Turso / SQLite logic di Python)
 interface LearnedVocabItem {
   id: string;
   term_maanyan: string;
@@ -162,19 +191,24 @@ app.get("/api/vocab", (req, res) => {
   });
 });
 
-app.post("/api/learn", (req, res) => {
+app.post("/api/learn", async (req, res) => {
   const { term, meaning, category, example } = req.body;
   if (!term || !meaning) {
     return res.status(400).json({ error: "Term dan meaning wajib diisi" });
   }
 
-  const existingIndex = learnedVocabList.findIndex(v => v.term_maanyan.toLowerCase() === term.toLowerCase());
+  const cleanTerm = term.trim().toLowerCase();
+  const cleanMeaning = meaning.trim().toLowerCase();
+  const cleanCategory = category || "Umum";
+  const cleanExample = example || "";
+
+  const existingIndex = learnedVocabList.findIndex(v => v.term_maanyan.toLowerCase() === cleanTerm);
   const newItem: LearnedVocabItem = {
     id: String(Date.now()),
-    term_maanyan: term.trim().toLowerCase(),
-    meaning_indonesian: meaning.trim().toLowerCase(),
-    category: category || "Umum",
-    example_sentence: example || "",
+    term_maanyan: cleanTerm,
+    meaning_indonesian: cleanMeaning,
+    category: cleanCategory,
+    example_sentence: cleanExample,
     contributor: "Simulator User",
     created_at: new Date().toISOString()
   };
@@ -185,16 +219,41 @@ app.post("/api/learn", (req, res) => {
     learnedVocabList.unshift(newItem);
   }
 
+  // Simpan ke Turso Database jika terhubung
+  await insertVocabToTurso(cleanTerm, cleanMeaning, cleanCategory, cleanExample, "Simulator User");
+
   res.json({ success: true, item: newItem, totalLearned: learnedVocabList.length });
 });
 
 app.post("/api/reset-learned", (req, res) => {
   learnedVocabList = [];
   learnedRuleList = [];
-  res.json({ success: true, message: "Memori SQLite / simulasi berhasil direset" });
+  res.json({ success: true, message: "Memori simulasi berhasil direset" });
 });
 
-// API Chat dengan Gemini + Auto-Learning Detection
+// Endpoint Status & Inisialisasi Manual Turso Database
+app.get("/api/turso-status", (req, res) => {
+  const config = getTursoConfig();
+  res.json({
+    configured: config.isConfigured,
+    url: config.url ? `${config.url.slice(0, 18)}...` : null,
+    totalVocab: learnedVocabList.length,
+    totalRules: learnedRuleList.length
+  });
+});
+
+app.post("/api/turso-init", async (req, res) => {
+  const result = await initTursoDatabase();
+  if (result.success) {
+    const dbVocabs = await fetchAllVocabFromTurso();
+    if (dbVocabs.length > 0) learnedVocabList = dbVocabs;
+    const dbRules = await fetchAllRulesFromTurso();
+    if (dbRules.length > 0) learnedRuleList = dbRules;
+  }
+  res.json(result);
+});
+
+// API Chat dengan Gemini (Resilient Fallback) + Auto-Learning Detection
 app.post("/api/chat", async (req, res) => {
   try {
     const { message, mode = "chat", history = [] } = req.body;
@@ -202,7 +261,6 @@ app.post("/api/chat", async (req, res) => {
       return res.status(400).json({ error: "Pesan tidak boleh kosong" });
     }
 
-    const ai = getAiClient();
     let detectedLearning: any = null;
 
     // 1. Deteksi apakah pesan ini mengandung pengajaran kosakata / koreksi
@@ -224,25 +282,21 @@ Kembalikan HANYA format JSON:
   "rule": "penjelasan aturan jika ada"
 }`;
 
-        const detectionResp = await ai.models.generateContent({
-          model: "gemini-3.1-flash-lite",
-          contents: detectionPrompt,
-          config: {
-            responseMimeType: "application/json",
-            temperature: 0.1
-          }
+        const detectionResp = await generateGeminiContent(detectionPrompt, {
+          responseMimeType: "application/json",
+          temperature: 0.1
         });
 
         const parsed = JSON.parse(detectionResp.text?.trim() || "{}");
         if (parsed.is_teaching && parsed.term && parsed.meaning) {
           detectedLearning = {
-            term: parsed.term.toLowerCase(),
-            meaning: parsed.meaning.toLowerCase(),
+            term: parsed.term.toLowerCase().trim(),
+            meaning: parsed.meaning.toLowerCase().trim(),
             category: parsed.category || "Kosakata Baru",
             example: parsed.example || ""
           };
 
-          // Simpan ke daftar learned vocab
+          // Simpan ke daftar learned vocab di memori
           const existingIdx = learnedVocabList.findIndex(v => v.term_maanyan.toLowerCase() === detectedLearning.term.toLowerCase());
           const newItem: LearnedVocabItem = {
             id: String(Date.now()),
@@ -259,6 +313,15 @@ Kembalikan HANYA format JSON:
           } else {
             learnedVocabList.unshift(newItem);
           }
+
+          // Simpan ke Turso
+          await insertVocabToTurso(
+            detectedLearning.term,
+            detectedLearning.meaning,
+            detectedLearning.category,
+            detectedLearning.example,
+            "Chat User"
+          );
         }
       } catch (err) {
         console.warn("Gagal mendeteksi auto learning:", err);
@@ -283,13 +346,9 @@ Kembalikan HANYA format JSON:
       parts: [{ text: message }]
     });
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.1-flash-lite",
-      contents: contents,
-      config: {
-        systemInstruction: systemInstruction,
-        temperature: mode === "chat" ? 0.7 : 0.4
-      }
+    const response = await generateGeminiContent(contents, {
+      systemInstruction: systemInstruction,
+      temperature: mode === "chat" ? 0.7 : 0.4
     });
 
     res.json({
@@ -348,7 +407,34 @@ app.get("/api/telegram-status", (req, res) => {
 });
 
 async function startServer() {
-  // Inisialisasi status Telegram Bot
+  // 1. Inisialisasi Turso Cloud Database jika konfigurasi tersedia
+  const tursoConfig = getTursoConfig();
+  if (tursoConfig.isConfigured) {
+    console.log("[Turso] Terdeteksi konfigurasi Turso URL & Auth Token. Menginisialisasi tabel database...");
+    try {
+      const initResult = await initTursoDatabase();
+      console.log(`[Turso] ${initResult.message}`);
+
+      // Muat kosakata dan aturan yang tersimpan di Turso
+      const dbVocabs = await fetchAllVocabFromTurso();
+      if (dbVocabs.length > 0) {
+        learnedVocabList = dbVocabs;
+        console.log(`[Turso] Berhasil memuat ${dbVocabs.length} kosakata dari Turso Database.`);
+      }
+
+      const dbRules = await fetchAllRulesFromTurso();
+      if (dbRules.length > 0) {
+        learnedRuleList = dbRules;
+        console.log(`[Turso] Berhasil memuat ${dbRules.length} aturan tata bahasa dari Turso Database.`);
+      }
+    } catch (tursoErr) {
+      console.error("[Turso] Gagal menghubungkan ke Turso saat startup:", tursoErr);
+    }
+  } else {
+    console.log("[Turso] Konfigurasi TURSO_DATABASE_URL dan TURSO_AUTH_TOKEN belum terdeteksi. Menggunakan in-memory storage.");
+  }
+
+  // 2. Inisialisasi status Telegram Bot
   const tgToken = process.env.TELEGRAM_BOT_TOKEN;
   const isProduction = process.env.NODE_ENV === "production";
 
@@ -363,7 +449,7 @@ async function startServer() {
             tgToken,
             getAiClient(),
             buildSystemInstruction,
-            (term, meaning, category, example) => {
+            async (term, meaning, category, example) => {
               console.log(`[Telegram Auto-Learn] Menambahkan kata baru: ${term} = ${meaning}`);
               const existingIdx = learnedVocabList.findIndex(v => v.term_maanyan.toLowerCase() === term.toLowerCase());
               const newItem: LearnedVocabItem = {
@@ -380,6 +466,15 @@ async function startServer() {
               } else {
                 learnedVocabList.unshift(newItem);
               }
+
+              // Simpan ke Turso Database
+              await insertVocabToTurso(
+                term.toLowerCase(),
+                meaning.toLowerCase(),
+                category || "Kosakata Baru (Telegram)",
+                example || "",
+                "Pengguna Telegram Live"
+              );
             }
           );
         } else {

@@ -48,12 +48,29 @@ export async function startTelegramPoller(
   token: string,
   aiClient: any,
   buildSystemInstruction: (mode: "chat" | "latihan") => string,
-  onLearn: (term: string, meaning: string, category: string, example?: string) => void
+  onLearn: (term: string, meaning: string, category: string, example?: string) => Promise<void> | void
 ) {
   if (pollingActive) return;
   pollingActive = true;
   botStatus.isRunning = true;
   botStatus.error = undefined;
+
+  async function callGemini(contents: any, config: any) {
+    try {
+      return await aiClient.models.generateContent({
+        model: "gemini-3.1-flash-lite",
+        contents,
+        config
+      });
+    } catch (e: any) {
+      console.warn("[Telegram Poller] gemini-3.1-flash-lite busy, fallback ke gemini-2.5-flash:", e?.message);
+      return await aiClient.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents,
+        config
+      });
+    }
+  }
 
   console.log(`[Telegram Poller] Memulai long polling untuk @${botStatus.botUsername || "bot"}...`);
 
@@ -104,14 +121,10 @@ export async function startTelegramPoller(
               if (hasTrigger && aiClient) {
                 try {
                   const detectionPrompt = `Analisis apakah pesan Telegram ini mengajarkan kosakata baru atau mengoreksi kata Dayak Ma'anyan:\n"${text}"\nKembalikan HANYA format JSON:\n{\n  "is_teaching": true/false,\n  "term": "kata ma'anyan atau kosongkan",\n  "meaning": "arti indonesia atau kosongkan",\n  "category": "kategori",\n  "example": "contoh kalimat jika ada"\n}`;
-                  const det = await aiClient.models.generateContent({
-                    model: "gemini-3.1-flash-lite",
-                    contents: detectionPrompt,
-                    config: { responseMimeType: "application/json", temperature: 0.1 }
-                  });
+                  const det = await callGemini(detectionPrompt, { responseMimeType: "application/json", temperature: 0.1 });
                   const parsed = JSON.parse(det.text?.trim() || "{}");
                   if (parsed.is_teaching && parsed.term && parsed.meaning) {
-                    onLearn(parsed.term, parsed.meaning, parsed.category || "Kosakata Baru (Telegram)", parsed.example || "");
+                    await onLearn(parsed.term, parsed.meaning, parsed.category || "Kosakata Baru (Telegram)", parsed.example || "");
                   }
                 } catch (e) {
                   console.warn("[Telegram Auto-Learn Error]", e);
@@ -121,13 +134,9 @@ export async function startTelegramPoller(
               // Generate AI response
               try {
                 const sysInstruction = buildSystemInstruction(mode);
-                const aiResp = await aiClient.models.generateContent({
-                  model: "gemini-3.1-flash-lite",
-                  contents: [{ role: "user", parts: [{ text }] }],
-                  config: {
-                    systemInstruction: sysInstruction,
-                    temperature: mode === "chat" ? 0.7 : 0.4
-                  }
+                const aiResp = await callGemini([{ role: "user", parts: [{ text }] }], {
+                  systemInstruction: sysInstruction,
+                  temperature: mode === "chat" ? 0.7 : 0.4
                 });
 
                 const replyText = aiResp.text || "Puang ka'itung... Maaf bot sedang berpikir.";
