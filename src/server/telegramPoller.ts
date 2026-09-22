@@ -57,10 +57,9 @@ export async function startTelegramPoller(
 
   async function callGemini(contents: any, config: any) {
     const modelsToTry = [
-      "gemini-3.6-flash",
-      "gemini-3.5-flash",
-      "gemini-3-flash-preview",
-      "gemini-flash-latest"
+      "gemini-3.8-flash",
+      "gemini-flash-latest",
+      "gemini-3.1-pro-preview"
     ];
 
     let lastError: any = null;
@@ -159,6 +158,9 @@ export async function startTelegramPoller(
 
               // Generate AI response
               try {
+                // Tampilkan indikator status "sedang mengetik..." di Telegram
+                sendChatAction(token, chatId, "typing").catch(() => {});
+
                 const sysInstruction = buildSystemInstruction(mode);
                 const aiResp = await callGemini([{ role: "user", parts: [{ text }] }], {
                   systemInstruction: sysInstruction,
@@ -169,7 +171,8 @@ export async function startTelegramPoller(
                 await sendTelegramMessage(token, chatId, replyText);
               } catch (err: any) {
                 console.error("[Telegram Reply Error]", err);
-                await sendTelegramMessage(token, chatId, "Maaf, terjadi sedikit kendala saat menghubungi otak AI. Coba tanyakan lagi ya!");
+                const fallbackMessage = "Maaf, terjadi sedikit kendala saat menghubungi otak AI. Coba tanyakan lagi ya!";
+                await sendTelegramMessage(token, chatId, fallbackMessage);
               }
             }
           }
@@ -186,16 +189,47 @@ export async function startTelegramPoller(
   poll();
 }
 
-async function sendTelegramMessage(token: string, chatId: number | string, text: string) {
+async function sendChatAction(token: string, chatId: number | string, action: string = "typing") {
   try {
-    await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    await fetch(`https://api.telegram.org/bot${token}/sendChatAction`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: text
-      })
+      body: JSON.stringify({ chat_id: chatId, action })
     });
+  } catch (_) {
+    // Ignore chat action errors
+  }
+}
+
+async function sendTelegramMessage(token: string, chatId: number | string, text: string) {
+  try {
+    // Telegram membatasi pesan maksimal 4096 karakter per request
+    const MAX_LENGTH = 3800;
+    if (text.length <= MAX_LENGTH) {
+      await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: text
+        })
+      });
+      return;
+    }
+
+    // Jika cerita/teks sangat panjang (misal cerita dongeng seperti Cinderella), bagi ke beberapa bagian
+    for (let i = 0; i < text.length; i += MAX_LENGTH) {
+      const chunk = text.substring(i, i + MAX_LENGTH);
+      await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: chunk
+        })
+      });
+      await new Promise(r => setTimeout(r, 400));
+    }
   } catch (err) {
     console.error("[Telegram Send Error]", err);
   }

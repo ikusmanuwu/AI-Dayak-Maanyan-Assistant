@@ -22,7 +22,7 @@ import {
 import { COMPREHENSIVE_MAANYAN_VOCAB } from "./src/data/comprehensiveVocab";
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 app.use(express.json());
 
@@ -44,14 +44,13 @@ function getAiClient(): GoogleGenAI {
   return aiClient;
 }
 
-// Helper generator dengan resilient model cascade (gemini-3.6-flash -> gemini-3.5-flash -> gemini-3-flash-preview)
+// Helper generator dengan resilient model cascade (gemini-3.8-flash -> gemini-flash-latest -> gemini-3.1-pro-preview)
 async function generateGeminiContent(contents: any, config: any) {
   const ai = getAiClient();
   const modelsToTry = [
-    "gemini-3.6-flash",
-    "gemini-3.5-flash",
-    "gemini-3-flash-preview",
-    "gemini-flash-latest"
+    "gemini-3.8-flash",
+    "gemini-flash-latest",
+    "gemini-3.1-pro-preview"
   ];
 
   let lastError: any = null;
