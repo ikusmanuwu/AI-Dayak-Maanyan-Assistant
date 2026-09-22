@@ -1,0 +1,8 @@
+{
+  "name": "Dayak Ma'anyan AI Assistant & Telegram Bot",
+  "description": "Asisten & Model Bahasa Dayak Ma'anyan dengan Telegram Bot Python, Core Knowledge Base, Dynamic Auto-Learning SQLite, dan Dual-Mode Percakapan.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

@@ -92,7 +92,7 @@ python3 --version
    ```env
    TELEGRAM_BOT_TOKEN="7123456789:AAFlkjhgfdsazxcvbnm1234567890"
    GEMINI_API_KEY="AIzaSyYourGeminiApiKeyHere"
-   GEMINI_MODEL="gemini-2.5-flash"
+   GEMINI_MODEL="gemini-3.6-flash"
    ```
 4. Simpan file tersebut.
 
@@ -158,7 +158,7 @@ Jika Anda tidak ingin laptop menyala terus-menerus, Anda bisa mendeploy bot ini 
 6. Masukkan Environment Variables di dashboard Render:
    - `TELEGRAM_BOT_TOKEN`
    - `GEMINI_API_KEY`
-   - `GEMINI_MODEL`: `gemini-2.5-flash`
+   - `GEMINI_MODEL`: `gemini-3.6-flash`
 7. Klik **Deploy** — Bot Anda sekarang berjalan 24 jam nonstop!
 
 ### Opsi B: Railway.app / Fly.io / VPS Gratis (Oracle Cloud Free Tier)
