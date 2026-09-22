@@ -47,7 +47,7 @@ export function stopTelegramPoller() {
 export async function startTelegramPoller(
   token: string,
   aiClient: any,
-  buildSystemInstruction: (mode: "chat" | "latihan") => string,
+  buildSystemInstruction: (mode: "chat" | "latihan", contextText?: string) => string,
   onLearn: (term: string, meaning: string, category: string, example?: string) => Promise<void> | void
 ) {
   if (pollingActive) return;
@@ -57,22 +57,35 @@ export async function startTelegramPoller(
 
   async function callGemini(contents: any, config: any) {
     const modelsToTry = [
+      "gemini-3-flash-preview",
+      "gemini-3.6-flash",
       "gemini-3.8-flash",
-      "gemini-flash-latest",
-      "gemini-3.1-pro-preview"
+      "gemini-flash-latest"
     ];
 
     let lastError: any = null;
-    for (const model of modelsToTry) {
-      try {
-        return await aiClient.models.generateContent({
-          model,
-          contents,
-          config
-        });
-      } catch (e: any) {
-        lastError = e;
-        console.warn(`[Telegram Poller] Model ${model} gagal (${e?.status || e?.message}). Mencoba model cadangan...`);
+    // Coba loop dengan exponential backoff jika terkena spike traffic (503) atau rate limit sementara (429)
+    for (let attempt = 0; attempt < 2; attempt++) {
+      for (const model of modelsToTry) {
+        try {
+          return await aiClient.models.generateContent({
+            model,
+            contents,
+            config
+          });
+        } catch (e: any) {
+          lastError = e;
+          const status = e?.status || e?.statusCode;
+          console.warn(`[Telegram Poller] Model ${model} percobaan #${attempt + 1} gagal (${status || e?.message}).`);
+          // Jika terkena 503 (high demand) atau 429 (rate limit), beri jeda sejenak sebelum coba model lain
+          if (status === 503 || status === 429) {
+            await new Promise(r => setTimeout(r, 1200));
+          }
+        }
+      }
+      // Tunggu 2.5 detik sebelum percobaan kedua
+      if (attempt === 0) {
+        await new Promise(r => setTimeout(r, 2500));
       }
     }
     throw lastError || new Error("Semua model Gemini tidak dapat dijangkau.");
@@ -141,8 +154,9 @@ export async function startTelegramPoller(
                   }
                 }
 
-                // 2. Jika bukan pola baris sederhana, gunakan deteksi AI Gemini
-                if (!learnedAnyFromLines && aiClient) {
+                // 2. Jika bukan pola baris sederhana, hanya gunakan AI jika ada keyword pengajaran eksplisit
+                const isExplicitTeaching = /^(?:kata baru|koreksi|tambahkan kosakata|catat kata|saya ajarkan)\s*[:=-]/i.test(text);
+                if (!learnedAnyFromLines && isExplicitTeaching && aiClient) {
                   try {
                     const detectionPrompt = `Analisis apakah pesan Telegram ini mengajarkan kosakata baru atau mengoreksi kata Dayak Ma'anyan:\n"${text}"\nKembalikan HANYA format JSON:\n{\n  "is_teaching": true/false,\n  "term": "kata ma'anyan atau kosongkan",\n  "meaning": "arti indonesia atau kosongkan",\n  "category": "kategori",\n  "example": "contoh kalimat jika ada"\n}`;
                     const det = await callGemini(detectionPrompt, { responseMimeType: "application/json", temperature: 0.1 });
@@ -161,7 +175,7 @@ export async function startTelegramPoller(
                 // Tampilkan indikator status "sedang mengetik..." di Telegram
                 sendChatAction(token, chatId, "typing").catch(() => {});
 
-                const sysInstruction = buildSystemInstruction(mode);
+                const sysInstruction = buildSystemInstruction(mode, text);
                 const aiResp = await callGemini([{ role: "user", parts: [{ text }] }], {
                   systemInstruction: sysInstruction,
                   temperature: mode === "chat" ? 0.7 : 0.4
@@ -171,7 +185,11 @@ export async function startTelegramPoller(
                 await sendTelegramMessage(token, chatId, replyText);
               } catch (err: any) {
                 console.error("[Telegram Reply Error]", err);
-                const fallbackMessage = "Maaf, terjadi sedikit kendala saat menghubungi otak AI. Coba tanyakan lagi ya!";
+                let fallbackMessage = "Maaf, server AI sedang mengalami antrean padat (high demand). Silakan kirim pesan lagi dalam beberapa detik ya!";
+                const status = err?.status || err?.statusCode;
+                if (status === 429) {
+                  fallbackMessage = "Maaf, batas kuota gratis Gemini API (RPM/RPD) saat ini sedang jeda sejenak. Mohon tunggu sekitar 30 detik lalu kirim ulang ya!";
+                }
                 await sendTelegramMessage(token, chatId, fallbackMessage);
               }
             }

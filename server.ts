@@ -44,26 +44,36 @@ function getAiClient(): GoogleGenAI {
   return aiClient;
 }
 
-// Helper generator dengan resilient model cascade (gemini-3.8-flash -> gemini-flash-latest -> gemini-3.1-pro-preview)
+// Helper generator dengan model cascade handal (gemini-3-flash-preview -> gemini-3.6-flash -> gemini-3.8-flash -> gemini-flash-latest)
 async function generateGeminiContent(contents: any, config: any) {
   const ai = getAiClient();
   const modelsToTry = [
+    "gemini-3-flash-preview",
+    "gemini-3.6-flash",
     "gemini-3.8-flash",
-    "gemini-flash-latest",
-    "gemini-3.1-pro-preview"
+    "gemini-flash-latest"
   ];
 
   let lastError: any = null;
-  for (const model of modelsToTry) {
-    try {
-      return await ai.models.generateContent({
-        model,
-        contents,
-        config
-      });
-    } catch (err: any) {
-      lastError = err;
-      console.warn(`[Gemini API] Model ${model} gagal (${err?.status || err?.message}). Mencoba model berikutnya...`);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    for (const model of modelsToTry) {
+      try {
+        return await ai.models.generateContent({
+          model,
+          contents,
+          config
+        });
+      } catch (err: any) {
+        lastError = err;
+        const status = err?.status || err?.statusCode;
+        console.warn(`[Gemini API] Model ${model} percobaan #${attempt + 1} gagal (${status || err?.message}). Mencoba alternatif...`);
+        if (status === 503 || status === 429) {
+          await new Promise(r => setTimeout(r, 1200));
+        }
+      }
+    }
+    if (attempt === 0) {
+      await new Promise(r => setTimeout(r, 2500));
     }
   }
   throw lastError || new Error("Semua model Gemini sedang tidak dapat dihubungi.");
@@ -154,15 +164,51 @@ const CORE_VOCABULARY = [
   }))
 ];
 
-function buildSystemInstruction(mode: "chat" | "latihan"): string {
-  const coreVocabStr = CORE_VOCABULARY.map(v => `- ${v.term} = ${v.meaning} (${v.category}) [${v.notes}]`).join("\n");
-  const learnedVocabStr = learnedVocabList.length > 0 
-    ? learnedVocabList.map(v => `- ${v.term_maanyan} = ${v.meaning_indonesian} (${v.category}) [Contoh: ${v.example_sentence || '-'}]`).join("\n")
+// Fungsi pintar penyaring kosakata relevan (Smart Context RAG) agar ukuran prompt ringkas dan tidak memicu 503/timeout
+function getRelevantVocab(userText: string = "", limit: number = 80): { term: string; meaning: string; category: string; notes: string }[] {
+  const words = userText.toLowerCase().replace(/[^a-zA-Z0-9\s]/g, " ").split(/\s+/).filter(w => w.length > 2);
+  
+  if (words.length === 0) {
+    return CORE_VOCABULARY.slice(0, limit);
+  }
+
+  const scored = CORE_VOCABULARY.map(item => {
+    let score = 0;
+    const termLower = item.term.toLowerCase();
+    const meaningLower = item.meaning.toLowerCase();
+    
+    for (const w of words) {
+      if (termLower.includes(w)) score += 3;
+      if (meaningLower.includes(w)) score += 2;
+    }
+    return { item, score };
+  });
+
+  // Urutkan yang paling relevan dulu, lalu lengkapi dengan kosakata dasar
+  const relevant = scored
+    .filter(s => s.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map(s => s.item);
+
+  const fallback = CORE_VOCABULARY.slice(0, 40);
+  const combined = [...relevant, ...fallback];
+  const unique = Array.from(new Map(combined.map(v => [v.term, v])).values());
+  return unique.slice(0, limit);
+}
+
+function buildSystemInstruction(mode: "chat" | "latihan", contextText: string = ""): string {
+  const relevantVocab = getRelevantVocab(contextText, 70);
+  const coreVocabStr = relevantVocab.map(v => `- ${v.term} = ${v.meaning} (${v.category})`).join("\n");
+  
+  const recentLearned = learnedVocabList.slice(0, 30);
+  const learnedVocabStr = recentLearned.length > 0 
+    ? recentLearned.map(v => `- ${v.term_maanyan} = ${v.meaning_indonesian} (${v.category})`).join("\n")
     : "(Belum ada kosakata tambahan yang dipelajari)";
 
-  const learnedRulesStr = learnedRuleList.length > 0
-    ? learnedRuleList.map(r => `- ${r.title}: ${r.rule_description}`).join("\n")
-    : "(Belum ada aturan tambahan)";
+  const recentRules = learnedRuleList.slice(0, 10);
+  const learnedRulesStr = recentRules.length > 0
+    ? recentRules.map(r => `- ${r.title}: ${r.rule_description}`).join("\n")
+    : "(Gunakan tata bahasa Ma'anyan standar)";
 
   const modeInstruction = mode === "latihan"
     ? `[MODE LATIHAN & INTERACTIVE TESTING]
@@ -173,26 +219,26 @@ Tugas Utama:
     : `[MODE CHAT & ROLEPLAY PENUTUR ASLI]
 Tugas Utama:
 1. Berperan sebagai penutur asli Dayak Ma'anyan yang ramah dan luwes.
-2. Jawablah terutama dalam bahasa Dayak Ma'anyan yang alami.
-3. Di bawah kalimat bahasa Dayak Ma'anyan, sertakan terjemahan bahasa Indonesia dalam kurung/tanda kutip agar pengguna bisa belajar.
-4. Gunakan partikel khas seperti 'tatu'u' (banget), 'daya/dagana' (karena), 'kude' (tetapi), 'nelang' (sambil), 'ta'ati' (sekarang), dan bedakan tingkatan lapar (layah -> kalauan -> hinut).`;
+2. Jawablah dalam bahasa Dayak Ma'anyan yang alami.
+3. Di bawah atau di samping kalimat bahasa Dayak Ma'anyan, sertakan terjemahan bahasa Indonesia dalam kurung/tanda kutip agar pengguna mengerti.
+4. Gunakan partikel khas seperti: hang (di), ma (ke), tatu'u (sangat/banget), daya/dagana (karena), kude (tetapi), nelang (sambil), ta'ati (sekarang), haut (sudah), puang/ang (tidak).`;
 
   return `Anda adalah Model Bahasa & Asisten AI Cerdas Bahasa Dayak Ma'anyan (Kalimantan Tengah / Barito Timur).
 
 ${modeInstruction}
 
-=== CORE KNOWLEDGE BASE (KOSAKATA & ATURAN AWAL) ===
+=== PANDUAN KOSAKATA PILIHAN ===
 ${coreVocabStr}
 
-=== DYNAMIC MEMORY (KOSAKATA BARU HASIL AUTO-LEARNING DATABASE) ===
+=== KOSAKATA TERBARU DARI PENGGUNA ===
 ${learnedVocabStr}
 
-[Aturan Tambahan]:
+[Aturan Tata Bahasa]:
 ${learnedRulesStr}
 
 === PRINSIP PENTING ===
 - Responsif, lestarikan keaslian bahasa Dayak Ma'anyan.
-- Jika pengguna mengoreksi atau mengajarkan kata baru, ucapkan terima kasih dan gunakan pengetahuan tersebut.`.trim();
+- Jika diminta bercerita atau dongeng (misal: Cinderella, Palanuk), ceritakan dalam bahasa Dayak Ma'anyan yang runtut dan sertakan terjemahan bahasa Indonesia.`.trim();
 }
 
 // API Routes
@@ -276,47 +322,32 @@ app.post("/api/chat", async (req, res) => {
 
     let detectedLearning: any = null;
 
-    // 1. Deteksi apakah pesan ini mengandung pengajaran kosakata / koreksi
-    const triggers = ["artinya", "artian", "harusnya", "salah", "koreksi", "beda", "maanyan", "kata", "bukan", "adalah"];
-    const hasTrigger = triggers.some(t => message.toLowerCase().includes(t));
-
-    if (hasTrigger || message.length > 20) {
-      try {
-        const detectionPrompt = `Analisis apakah pesan ini mengajarkan kosakata baru, mengoreksi terjemahan, atau aturan bahasa Dayak Ma'anyan:
-"${message}"
-
-Kembalikan HANYA format JSON:
-{
-  "is_teaching": true / false,
-  "term": "kata ma'anyan atau kosongkan",
-  "meaning": "arti indonesia atau kosongkan",
-  "category": "kategori kata",
-  "example": "contoh kalimat",
-  "rule": "penjelasan aturan jika ada"
-}`;
-
-        const detectionResp = await generateGeminiContent(detectionPrompt, {
-          responseMimeType: "application/json",
-          temperature: 0.1
-        });
-
-        const parsed = JSON.parse(detectionResp.text?.trim() || "{}");
-        if (parsed.is_teaching && parsed.term && parsed.meaning) {
+    // 1. Deteksi cepat auto-learning berbasis pola regex (hemat kuota & tanpa delay LLM)
+    const lines = message.split("\n").map((l: string) => l.trim()).filter(Boolean);
+    for (const line of lines) {
+      // Pola: "kata artinya arti" atau "kata = arti" atau "kata baru: kata artinya arti"
+      const cleanLine = line.replace(/^(?:kata baru|koreksi|tambahkan kosakata|catat kata)\s*[:=-]?\s*/i, "").trim();
+      const match = cleanLine.match(/^([a-zA-Z0-9'`\-~\s]{2,30})\s+(?:artinya|=|maknanya|yaitu|seharusnya)\s+([a-zA-Z0-9'`\-~,\s]{2,80})$/i);
+      if (match && match[1] && match[2]) {
+        const term = match[1].trim().toLowerCase();
+        const meaning = match[2].trim().toLowerCase();
+        
+        // Pastikan bukan sekadar kalimat tanya seperti "apa artinya kuman"
+        if (!term.startsWith("apa") && !term.startsWith("kenapa") && !term.startsWith("inun") && !term.includes("?")) {
           detectedLearning = {
-            term: parsed.term.toLowerCase().trim(),
-            meaning: parsed.meaning.toLowerCase().trim(),
-            category: parsed.category || "Kosakata Baru",
-            example: parsed.example || ""
+            term: term,
+            meaning: meaning,
+            category: "Kosakata Baru",
+            example: `${term} = ${meaning}`
           };
 
-          // Simpan ke daftar learned vocab di memori
-          const existingIdx = learnedVocabList.findIndex(v => v.term_maanyan.toLowerCase() === detectedLearning.term.toLowerCase());
+          const existingIdx = learnedVocabList.findIndex(v => v.term_maanyan.toLowerCase() === term);
           const newItem: LearnedVocabItem = {
             id: String(Date.now()),
-            term_maanyan: detectedLearning.term,
-            meaning_indonesian: detectedLearning.meaning,
-            category: detectedLearning.category,
-            example_sentence: detectedLearning.example,
+            term_maanyan: term,
+            meaning_indonesian: meaning,
+            category: "Kosakata Baru",
+            example_sentence: `${term} = ${meaning}`,
             contributor: "Chat User",
             created_at: new Date().toISOString()
           };
@@ -327,22 +358,14 @@ Kembalikan HANYA format JSON:
             learnedVocabList.unshift(newItem);
           }
 
-          // Simpan ke Turso
-          await insertVocabToTurso(
-            detectedLearning.term,
-            detectedLearning.meaning,
-            detectedLearning.category,
-            detectedLearning.example,
-            "Chat User"
-          );
+          insertVocabToTurso(term, meaning, "Kosakata Baru", `${term} = ${meaning}`, "Chat User").catch(() => {});
+          break;
         }
-      } catch (err) {
-        console.warn("Gagal mendeteksi auto learning:", err);
       }
     }
 
     // 2. Generate balasan dengan dynamic system instruction
-    const systemInstruction = buildSystemInstruction(mode as "chat" | "latihan");
+    const systemInstruction = buildSystemInstruction(mode as "chat" | "latihan", message);
 
     // Format history
     const contents: any[] = [];
@@ -372,6 +395,21 @@ Kembalikan HANYA format JSON:
 
   } catch (error: any) {
     console.error("Chat API Error:", error);
+    const status = error?.status || error?.statusCode;
+    if (status === 429) {
+      return res.status(200).json({
+        reply: "⚠️ *Batas kuota Gemini API gratis saat ini sedang jeda sejenak (rate limit).* Mohon tunggu sekitar 20-30 detik lalu kirim ulang pesan kamu ya!",
+        detectedLearning: null,
+        totalLearned: learnedVocabList.length
+      });
+    }
+    if (status === 503) {
+      return res.status(200).json({
+        reply: "⚠️ *Server Google Gemini sedang mengalami lonjakan antrean (high demand).* Mohon coba kirim ulang dalam beberapa detik.",
+        detectedLearning: null,
+        totalLearned: learnedVocabList.length
+      });
+    }
     res.status(500).json({ error: error.message || "Internal server error" });
   }
 });
