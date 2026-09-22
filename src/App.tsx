@@ -158,6 +158,21 @@ export function App() {
     }
   };
 
+  const handleToggleBotPoller = async () => {
+    const isRunning = botStatus?.status?.isRunning;
+    const endpoint = isRunning ? '/api/telegram-poller/stop' : '/api/telegram-poller/start';
+    try {
+      const res = await fetch(endpoint, { method: 'POST' });
+      const data = await res.json();
+      if (data.status) {
+        setBotStatus((prev) => prev ? { ...prev, status: data.status } : null);
+      }
+      await fetchBotStatus();
+    } catch (err) {
+      console.error('Gagal mengubah status bot poller:', err);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-stone-100/60 text-stone-900 flex flex-col font-sans">
       <Header
@@ -165,6 +180,7 @@ export function App() {
         onTabChange={setActiveTab}
         learnedCount={learnedVocab.length}
         botStatus={botStatus}
+        onToggleBot={handleToggleBotPoller}
       />
 
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8">

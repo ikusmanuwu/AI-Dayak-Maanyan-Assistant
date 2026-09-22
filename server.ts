@@ -406,6 +406,65 @@ app.get("/api/telegram-status", (req, res) => {
   });
 });
 
+function launchTelegramPoller(tgToken: string) {
+  startTelegramPoller(
+    tgToken,
+    getAiClient(),
+    buildSystemInstruction,
+    async (term, meaning, category, example) => {
+      console.log(`[Telegram Auto-Learn] Menambahkan kata baru: ${term} = ${meaning}`);
+      const cleanTerm = term.toLowerCase().trim();
+      const cleanMeaning = meaning.toLowerCase().trim();
+      const cleanCategory = category || "Kosakata Baru (Telegram)";
+      const cleanExample = example || "";
+      const existingIdx = learnedVocabList.findIndex(v => v.term_maanyan.toLowerCase() === cleanTerm);
+      const newItem: LearnedVocabItem = {
+        id: String(Date.now()),
+        term_maanyan: cleanTerm,
+        meaning_indonesian: cleanMeaning,
+        category: cleanCategory,
+        example_sentence: cleanExample,
+        contributor: "Pengguna Telegram Live",
+        created_at: new Date().toISOString()
+      };
+      if (existingIdx >= 0) {
+        learnedVocabList[existingIdx] = newItem;
+      } else {
+        learnedVocabList.unshift(newItem);
+      }
+      await insertVocabToTurso(
+        cleanTerm,
+        cleanMeaning,
+        cleanCategory,
+        cleanExample,
+        "Pengguna Telegram Live"
+      );
+    }
+  );
+}
+
+// Endpoint untuk Manual Start / Stop Poller dari Web Dashboard
+app.post("/api/telegram-poller/start", async (req, res) => {
+  const tgToken = process.env.TELEGRAM_BOT_TOKEN;
+  if (!tgToken) {
+    return res.status(400).json({ success: false, error: "TELEGRAM_BOT_TOKEN belum diset di environment." });
+  }
+
+  const verify = await verifyTelegramToken(tgToken);
+  if (!verify.success) {
+    return res.status(400).json({ success: false, error: verify.error });
+  }
+
+  launchTelegramPoller(tgToken);
+
+  res.json({ success: true, message: `Poller Telegram @${verify.bot.username} berhasil diaktifkan!`, status: getBotStatus() });
+});
+
+app.post("/api/telegram-poller/stop", (req, res) => {
+  stopTelegramPoller();
+  res.json({ success: true, message: "Poller Telegram berhasil dihentikan.", status: getBotStatus() });
+});
+
 async function startServer() {
   // 1. Inisialisasi Turso Cloud Database jika konfigurasi tersedia
   const tursoConfig = getTursoConfig();
@@ -436,49 +495,41 @@ async function startServer() {
 
   // 2. Inisialisasi status Telegram Bot
   const tgToken = process.env.TELEGRAM_BOT_TOKEN;
+  
+  // Deteksi Railway / Production Deployment
+  const isRailway = Boolean(
+    process.env.RAILWAY_ENVIRONMENT ||
+    process.env.RAILWAY_SERVICE_ID ||
+    process.env.RAILWAY_PROJECT_ID ||
+    process.env.RAILWAY_STATIC_URL
+  );
   const isProduction = process.env.NODE_ENV === "production";
+  const isExplicitlyDisabled = process.env.DISABLE_TELEGRAM_POLLER === "true";
+  const isExplicitlyEnabled = process.env.ENABLE_TELEGRAM_POLLER === "true";
+  
+  // Cek apakah sedang di sandbox AI Studio dev preview
+  const isAiStudioDevPreview = Boolean(
+    process.env.K_SERVICE && process.env.K_SERVICE.includes("ais-dev") && !isRailway
+  );
+  
+  // Di Railway, Production, atau server mandiri: Poller selalu otomatis aktif
+  const shouldAutoStartPoller = !isExplicitlyDisabled && (
+    isRailway ||
+    isProduction ||
+    isExplicitlyEnabled ||
+    !isAiStudioDevPreview
+  );
 
   if (tgToken) {
     console.log("[Telegram] Memverifikasi token Telegram Bot...");
     verifyTelegramToken(tgToken).then(res => {
       if (res.success) {
         console.log(`[Telegram] Bot Terhubung sebagai @${res.bot.username} (${res.bot.first_name})`);
-        if (isProduction) {
-          // Hanya jalankan background poller di container production
-          startTelegramPoller(
-            tgToken,
-            getAiClient(),
-            buildSystemInstruction,
-            async (term, meaning, category, example) => {
-              console.log(`[Telegram Auto-Learn] Menambahkan kata baru: ${term} = ${meaning}`);
-              const existingIdx = learnedVocabList.findIndex(v => v.term_maanyan.toLowerCase() === term.toLowerCase());
-              const newItem: LearnedVocabItem = {
-                id: String(Date.now()),
-                term_maanyan: term.toLowerCase(),
-                meaning_indonesian: meaning.toLowerCase(),
-                category: category || "Kosakata Baru (Telegram)",
-                example_sentence: example || "",
-                contributor: "Pengguna Telegram Live",
-                created_at: new Date().toISOString()
-              };
-              if (existingIdx >= 0) {
-                learnedVocabList[existingIdx] = newItem;
-              } else {
-                learnedVocabList.unshift(newItem);
-              }
-
-              // Simpan ke Turso Database
-              await insertVocabToTurso(
-                term.toLowerCase(),
-                meaning.toLowerCase(),
-                category || "Kosakata Baru (Telegram)",
-                example || "",
-                "Pengguna Telegram Live"
-              );
-            }
-          );
+        if (shouldAutoStartPoller) {
+          console.log(`[Telegram] Menjalankan Telegram Long Poller (Platform: ${isRailway ? 'Railway' : isProduction ? 'Production' : 'Standalone Server'})...`);
+          launchTelegramPoller(tgToken);
         } else {
-          console.log("[Telegram] Dev environment: Poller tidak dijalankan di preview agar tidak bertabrakan dengan deployment production yang aktif.");
+          console.log("[Telegram] AI Studio dev preview terdeteksi. Poller default standby agar tidak bentrok dengan instance Railway. Anda bisa menyalakan poller kapan saja dari tombol di Web UI Dashboard atau set ENABLE_TELEGRAM_POLLER=true.");
         }
       } else {
         console.error("[Telegram] Gagal verifikasi token:", res.error);

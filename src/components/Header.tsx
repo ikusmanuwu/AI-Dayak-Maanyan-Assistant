@@ -1,5 +1,5 @@
-import React from 'react';
-import { Bot, Sparkles, BookOpen, Database, Code, CheckCircle2, AlertCircle } from 'lucide-react';
+import React, { useState } from 'react';
+import { Bot, Sparkles, BookOpen, Database, Code, CheckCircle2, AlertCircle, Play, Square, Loader2 } from 'lucide-react';
 import { TelegramBotStatus } from '../types';
 
 interface HeaderProps {
@@ -7,15 +7,29 @@ interface HeaderProps {
   onTabChange: (tab: 'simulator' | 'vocab' | 'memory' | 'python') => void;
   learnedCount: number;
   botStatus: TelegramBotStatus | null;
+  onToggleBot?: () => Promise<void>;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   activeTab,
   onTabChange,
   learnedCount,
-  botStatus
+  botStatus,
+  onToggleBot
 }) => {
+  const [isToggling, setIsToggling] = useState(false);
   const isBotActive = botStatus?.status?.isRunning;
+  const isConfigured = botStatus?.tokenConfigured;
+
+  const handleToggle = async () => {
+    if (!onToggleBot) return;
+    setIsToggling(true);
+    try {
+      await onToggleBot();
+    } finally {
+      setIsToggling(false);
+    }
+  };
 
   return (
     <header className="border-b border-stone-200 bg-white/95 backdrop-blur-md sticky top-0 z-30">
@@ -54,13 +68,41 @@ export const Header: React.FC<HeaderProps> = ({
                 @dayak_maanyan_v2_bot
               </a>
               {isBotActive ? (
-                <span className="inline-flex items-center gap-1 text-[11px] text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded-full font-medium">
-                  <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Active
+                <span className="inline-flex items-center gap-1 text-[11px] text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full font-medium">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                  <CheckCircle2 className="w-3 h-3 text-emerald-600" /> Active Polling
                 </span>
               ) : (
-                <span className="inline-flex items-center gap-1 text-[11px] text-stone-500 bg-stone-200 px-1.5 py-0.5 rounded-full font-medium">
-                  <AlertCircle className="w-3 h-3 text-stone-400" /> Ready
+                <span className="inline-flex items-center gap-1 text-[11px] text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full font-medium">
+                  <AlertCircle className="w-3 h-3 text-amber-500" /> Standby
                 </span>
+              )}
+
+              {isConfigured && onToggleBot && (
+                <button
+                  onClick={handleToggle}
+                  disabled={isToggling}
+                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium transition-colors cursor-pointer border ${
+                    isBotActive
+                      ? 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100'
+                      : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                  }`}
+                  title={isBotActive ? "Hentikan long-poller bot" : "Aktifkan long-poller bot sekarang"}
+                >
+                  {isToggling ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : isBotActive ? (
+                    <>
+                      <Square className="w-2.5 h-2.5 fill-current" />
+                      <span>Stop Bot</span>
+                    </>
+                  ) : (
+                    <>
+                      <Play className="w-2.5 h-2.5 fill-current" />
+                      <span>Nyalakan Bot</span>
+                    </>
+                  )}
+                </button>
               )}
             </div>
 
