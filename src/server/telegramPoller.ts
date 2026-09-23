@@ -55,6 +55,38 @@ interface TgHistoryItem {
 }
 const userChatHistories = new Map<number | string, TgHistoryItem[]>();
 
+export function extractLearnedOrCorrectedVocab(text: string): { term: string; meaning: string; category?: string; note?: string } | null {
+  const clean = text.trim();
+  
+  // 1. "arti a itu harusnya b" / "arti a seharusnya b" / "arti a yang benar b"
+  let m = clean.match(/(?:arti|makna)\s+([a-zA-Z0-9'`\-~]+)\s+(?:itu\s+)?(?:harusnya|seharusnya|yang\s+benar\s+adalah|yang\s+benar|adalah|bukan\s+.+?\s+tapi|bukan\s+.+?\s+melainkan)\s+(.+)/i);
+  if (m && m[1] && m[2]) return { term: m[1].trim(), meaning: m[2].trim(), category: "Koreksi Pengguna" };
+
+  // 2. "a itu harusnya b" / "a harusnya b" / "a seharusnya b"
+  m = clean.match(/^([a-zA-Z0-9'`\-~]+)\s+(?:itu\s+)?(?:harusnya|seharusnya)\s+(.+)$/i);
+  if (m && m[1] && m[2]) return { term: m[1].trim(), meaning: m[2].trim(), category: "Koreksi Pengguna" };
+
+  // 3. "salah/keliru/bukan, [harusnya] a artinya b"
+  m = clean.match(/(?:salah|keliru|bukan)[,!.\s]+(?:yang\s+benar\s+|harusnya\s+|seharusnya\s+)?([a-zA-Z0-9'`\-~]+)\s+(?:artinya|=|maknanya|itu)\s+(.+)/i);
+  if (m && m[1] && m[2]) return { term: m[1].trim(), meaning: m[2].trim(), category: "Koreksi Pengguna" };
+
+  // 4. "koreksi/ralat/catat: a artinya b"
+  m = clean.match(/(?:koreksi|ralat|catat|ingat|saya\s+ajarkan)(?:\s+ya|\s+dong|\s+nih)?[:,\s]+([a-zA-Z0-9'`\-~]+)\s+(?:artinya|=|maknanya|itu)\s+(.+)/i);
+  if (m && m[1] && m[2]) return { term: m[1].trim(), meaning: m[2].trim(), category: "Koreksi Pengguna" };
+
+  // 5. "bahasa maanyan hati adalah atei"
+  m = clean.match(/bahasa\s+(?:ma'anyan|maanyan|dayak)(?:nya|\s+dari)?\s+([a-zA-Z0-9'`\-~]+)\s+(?:itu|adalah|harusnya|=|yaitu)\s+([a-zA-Z0-9'`\-~]+)/i);
+  if (m && m[1] && m[2]) return { term: m[2].trim(), meaning: m[1].trim(), category: "Kosakata Baru" };
+
+  // 6. "a artinya b" / "a = b"
+  m = clean.match(/^([a-zA-Z0-9'`\-~\s]+?)\s+(?:artinya|=|maknanya|yaitu|artian|ialah)\s+(.+)$/i);
+  if (m && m[1] && m[2] && !m[1].toLowerCase().startsWith("apa") && !m[1].toLowerCase().startsWith("kenapa") && !m[1].includes("?")) {
+    return { term: m[1].trim(), meaning: m[2].trim(), category: "Kosakata Baru" };
+  }
+
+  return null;
+}
+
 export async function startTelegramPoller(
   token: string,
   aiClient: any,
@@ -160,32 +192,28 @@ export async function startTelegramPoller(
               const isLatihan = text.toLowerCase().includes("/latihan") || text.toLowerCase().includes("latihan");
               const mode = isLatihan ? "latihan" : "chat";
 
-              // Check auto-learning (bisa single term atau bulk baris kata)
-              const triggers = ["artinya", "artian", "harusnya", "salah", "koreksi", "beda", "maanyan", "kata", "bukan", "adalah", "="];
+              // Check auto-learning / koreksi pengguna (bisa single term atau bulk baris kata)
+              const triggers = ["artinya", "artian", "harusnya", "seharusnya", "salah", "keliru", "koreksi", "ralat", "beda", "maanyan", "kata", "bukan", "adalah", "catat", "ingat", "="];
               const hasTrigger = triggers.some(t => text.toLowerCase().includes(t));
 
               if (hasTrigger) {
-                // 1. Coba deteksi cepat pola baris: "<kata> artinya <arti>" atau "<kata> = <arti>"
+                // 1. Coba deteksi cepat via regex komprehensif
                 const lines = text.split("\n").map((l: string) => l.trim()).filter(Boolean);
-                let learnedAnyFromLines = false;
+                let learnedAny = false;
 
                 for (const line of lines) {
-                  const match = line.match(/^([a-zA-Z0-9'`\-~\s]+?)\s+(?:artinya|=|maknanya|yaitu)\s+(.+)$/i);
-                  if (match && match[1] && match[2]) {
-                    const term = match[1].trim();
-                    const meaning = match[2].trim();
-                    if (term.length > 1 && meaning.length > 1 && !term.toLowerCase().startsWith("kata baru")) {
-                      await onLearn(term, meaning, "Kosakata Baru (Telegram)", `${term} artinya ${meaning}`);
-                      learnedAnyFromLines = true;
-                    }
+                  const extracted = extractLearnedOrCorrectedVocab(line);
+                  if (extracted && extracted.term && extracted.meaning) {
+                    await onLearn(extracted.term, extracted.meaning, extracted.category || "Koreksi/Kosakata Pengguna", `${extracted.term} artinya ${extracted.meaning}`);
+                    learnedAny = true;
                   }
                 }
 
-                // 2. Jika bukan pola baris sederhana, hanya gunakan AI jika ada keyword pengajaran eksplisit
-                const isExplicitTeaching = /^(?:kata baru|koreksi|tambahkan kosakata|catat kata|saya ajarkan)\s*[:=-]/i.test(text);
-                if (!learnedAnyFromLines && isExplicitTeaching && aiClient) {
+                // 2. Jika bukan pola baris sederhana tapi ada trigger eksplisit, gunakan AI extraction
+                const isExplicitTeaching = /^(?:kata baru|koreksi|ralat|tambahkan kosakata|catat kata|saya ajarkan|salah|harusnya)\b/i.test(text);
+                if (!learnedAny && isExplicitTeaching && aiClient) {
                   try {
-                    const detectionPrompt = `Analisis apakah pesan Telegram ini mengajarkan kosakata baru atau mengoreksi kata Dayak Ma'anyan:\n"${text}"\nKembalikan HANYA format JSON:\n{\n  "is_teaching": true/false,\n  "term": "kata ma'anyan atau kosongkan",\n  "meaning": "arti indonesia atau kosongkan",\n  "category": "kategori",\n  "example": "contoh kalimat jika ada"\n}`;
+                    const detectionPrompt = `Analisis apakah pesan Telegram ini mengajarkan kosakata baru atau mengoreksi arti kata Dayak Ma'anyan:\n"${text}"\nKembalikan HANYA format JSON:\n{\n  "is_teaching": true/false,\n  "term": "kata ma'anyan atau kosongkan",\n  "meaning": "arti indonesia atau kosongkan",\n  "category": "kategori",\n  "example": "contoh kalimat jika ada"\n}`;
                     const det = await callGemini(detectionPrompt, { responseMimeType: "application/json", temperature: 0.1 });
                     const parsed = JSON.parse(det.text?.trim() || "{}");
                     if (parsed.is_teaching && parsed.term && parsed.meaning) {

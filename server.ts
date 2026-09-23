@@ -7,7 +7,8 @@ import {
   verifyTelegramToken,
   startTelegramPoller,
   getBotStatus,
-  stopTelegramPoller
+  stopTelegramPoller,
+  extractLearnedOrCorrectedVocab
 } from "./src/server/telegramPoller";
 import {
   initTursoDatabase,
@@ -84,6 +85,31 @@ async function generateGeminiContent(contents: any, config: any) {
   throw lastError || new Error("Semua model Gemini sedang tidak dapat dihubungi.");
 }
 
+// Daftar kata bahasa Indonesia umum untuk normalisasi arah kosakata (Ma'anyan vs Indonesia)
+const KNOWN_INDONESIAN_WORDS = new Set([
+  "hati", "mengerti", "paham", "makan", "minum", "tidur", "matahari", "bulan", "bintang",
+  "air", "hujan", "rumah", "jalan", "teman", "anak", "orang", "ibu", "ayah", "kue", "ikan",
+  "buku", "senang", "sedih", "marah", "takut", "cinta", "sayang", "sayur", "nasi", "uang",
+  "baju", "celana", "tangan", "kaki", "kepala", "mata", "hidung", "mulut", "gigi", "telinga",
+  "pergi", "datang", "duduk", "berdiri", "bicara", "tahu", "mengajar", "belajar", "kamu",
+  "saya", "dia", "mereka", "kita", "kami", "apa", "siapa", "kapan", "dimana", "mengapa",
+  "bagaimana", "satu", "dua", "tiga", "empat", "lima", "enam", "tujuh", "delapan", "sembilan",
+  "sepuluh", "bukan", "sudah", "belum", "tidak", "bisa", "mau", "hendak", "akan", "selesai"
+]);
+
+export function normalizeVocabPair(inputTerm: string, inputMeaning: string): { term_maanyan: string; meaning_indonesian: string } {
+  const t = inputTerm.trim().toLowerCase();
+  const m = inputMeaning.trim().toLowerCase();
+
+  const isTermIndo = KNOWN_INDONESIAN_WORDS.has(t);
+  const isMeaningIndo = KNOWN_INDONESIAN_WORDS.has(m);
+
+  if (isTermIndo && !isMeaningIndo) {
+    return { term_maanyan: m, meaning_indonesian: t };
+  }
+  return { term_maanyan: t, meaning_indonesian: m };
+}
+
 // In-Memory Response Cache untuk menghindari request berulang (TTL 15 menit)
 const responseCache = new Map<string, { reply: string; timestamp: number }>();
 
@@ -107,12 +133,11 @@ function tryLocalDictionaryMatch(text: string): string | null {
   if (clean === "terima kasih" || clean === "makasih" || clean === "tarima kasih") {
     return "Tarima kasih ganta! (Terima kasih kembali / Sama-sama!). Sanang gina'u nulung hanyu. (Senang rasanya membantu kamu.)";
   }
-  if (clean === "siapa namamu" || clean === "hie ngaran nu" || clean === "siapa nama kamu") {
+  if (clean === "siapa namamu" || clean === "hie ngaran nu" || clean === "hie ngarannu" || clean === "siapa nama kamu") {
     return "Ngaran ku asisten AI Dayak Ma'anyan. Aku nulung hanyu bapaner nelang balajar basa ite. (Namaku asisten AI Dayak Ma'anyan. Aku membantumu berbicara dan belajar bahasa kita.)";
   }
 
-  // 2. Pola Pertanyaan Kamus Kata Tunggal:
-  // "apa arti <kata>", "arti <kata>", "apa artinya <kata>", "bahasa maanyannya <kata> apa?"
+  // 2. Pola Pertanyaan Kamus Kata Tunggal (Bidirectional Search):
   let targetWord = "";
   let direction: "maanyan_to_indo" | "indo_to_maanyan" | "both" = "both";
 
@@ -140,28 +165,38 @@ function tryLocalDictionaryMatch(text: string): string | null {
     const allLearned = learnedVocabList.map(v => ({ term: v.term_maanyan, meaning: v.meaning_indonesian, category: v.category, notes: v.example_sentence || "" }));
     const fullDict = [...allLearned, ...CORE_VOCABULARY];
 
-    if (direction === "maanyan_to_indo" || direction === "both") {
-      const found = fullDict.find(v => {
-        const t = v.term.toLowerCase();
-        return t === wordLower || t.split("/").map(s => s.trim()).includes(wordLower);
-      });
-      if (found) {
-        let res = `*${found.term}* hang bahasa Indonesia artinya **${found.meaning}**.\n\n📖 **Kategori:** ${found.category || "Kosakata Umum"}`;
-        if (found.notes) res += `\n📝 **Contoh/Catatan:** ${found.notes}`;
-        return res;
-      }
+    const foundByMaanyan = fullDict.find(v => {
+      const t = v.term.toLowerCase();
+      return t === wordLower || t.split("/").map(s => s.trim()).includes(wordLower);
+    });
+
+    const foundByIndo = fullDict.find(v => {
+      const m = v.meaning.toLowerCase();
+      return m === wordLower || m.split("/").map(s => s.trim()).includes(wordLower);
+    });
+
+    if (direction === "maanyan_to_indo" && foundByMaanyan) {
+      let res = `*${foundByMaanyan.term}* hang bahasa Indonesia artinya **${foundByMaanyan.meaning}**.\n\n📖 **Kategori:** ${foundByMaanyan.category || "Kosakata"}`;
+      if (foundByMaanyan.notes) res += `\n📝 **Contoh/Catatan:** ${foundByMaanyan.notes}`;
+      return res;
     }
 
-    if (direction === "indo_to_maanyan" || direction === "both") {
-      const found = fullDict.find(v => {
-        const m = v.meaning.toLowerCase();
-        return m === wordLower || m.split("/").map(s => s.trim()).includes(wordLower);
-      });
-      if (found) {
-        let res = `Bahasa Dayak Ma'anyan untuk **${found.meaning}** adalah **${found.term}**.\n\n📖 **Kategori:** ${found.category || "Kosakata Umum"}`;
-        if (found.notes) res += `\n📝 **Contoh/Catatan:** ${found.notes}`;
-        return res;
-      }
+    if (direction === "indo_to_maanyan" && foundByIndo) {
+      let res = `Bahasa Dayak Ma'anyan untuk **${foundByIndo.meaning}** adalah **${foundByIndo.term}**.\n\n📖 **Kategori:** ${foundByIndo.category || "Kosakata"}`;
+      if (foundByIndo.notes) res += `\n📝 **Contoh/Catatan:** ${foundByIndo.notes}`;
+      return res;
+    }
+
+    if (foundByMaanyan) {
+      let res = `*${foundByMaanyan.term}* hang bahasa Indonesia artinya **${foundByMaanyan.meaning}**.\n\n📖 **Kategori:** ${foundByMaanyan.category || "Kosakata"}`;
+      if (foundByMaanyan.notes) res += `\n📝 **Contoh/Catatan:** ${foundByMaanyan.notes}`;
+      return res;
+    }
+
+    if (foundByIndo) {
+      let res = `Bahasa Dayak Ma'anyan untuk **${foundByIndo.meaning}** adalah **${foundByIndo.term}**.\n\n📖 **Kategori:** ${foundByIndo.category || "Kosakata"}`;
+      if (foundByIndo.notes) res += `\n📝 **Contoh/Catatan:** ${foundByIndo.notes}`;
+      return res;
     }
   }
 
@@ -204,6 +239,9 @@ let learnedRuleList: LearnedRuleItem[] = [];
 
 // Core Knowledge Base
 const CORE_VOCABULARY = [
+  { term: "atei", meaning: "hati / perasaan / batin", category: "Tubuh & Rasa", notes: "organ hati atau suasana hati (misal: atei maeh = hati baik, sanang atei = senang hati)" },
+  { term: "kataru / pakataru", meaning: "mengerti / paham / tahu arti", category: "Pemahaman & Pikir", notes: "memahami sesuatu (kataru = paham, pakataru = tidak paham / belum mengerti)" },
+  { term: "sanang", meaning: "senang / gembira / bahagia", category: "Perasaan", notes: "merasa senang hati" },
   { term: "nguta / kuman", meaning: "makan", category: "Kosakata Dasar", notes: "kuman dan nguta sering digunakan bergantian untuk makan" },
   { term: "nahi", meaning: "nasi", category: "Kosakata Dasar", notes: "makanan pokok" },
   { term: "waday", meaning: "kue / kudapan", category: "Kosakata Dasar", notes: "kue tradisional atau cemilan" },
@@ -289,9 +327,9 @@ function buildSystemInstruction(mode: "chat" | "latihan", contextText: string = 
   const relevantVocab = getRelevantVocab(contextText, 70);
   const coreVocabStr = relevantVocab.map(v => `- ${v.term} = ${v.meaning} (${v.category})`).join("\n");
   
-  const recentLearned = learnedVocabList.slice(0, 30);
+  const recentLearned = learnedVocabList.slice(0, 40);
   const learnedVocabStr = recentLearned.length > 0 
-    ? recentLearned.map(v => `- ${v.term_maanyan} = ${v.meaning_indonesian} (${v.category})`).join("\n")
+    ? recentLearned.map(v => `- [Ma'anyan: ${v.term_maanyan}] = [Indonesia: ${v.meaning_indonesian}] (${v.category})`).join("\n")
     : "(Belum ada kosakata tambahan yang dipelajari)";
 
   const recentRules = learnedRuleList.slice(0, 10);
@@ -319,7 +357,7 @@ ${modeInstruction}
 === PANDUAN KOSAKATA PILIHAN ===
 ${coreVocabStr}
 
-=== KOSAKATA TERBARU DARI PENGGUNA ===
+=== KOSAKATA TAMBAHAN HASIL BELAJAR DARI PENGGUNA ===
 ${learnedVocabStr}
 
 [Aturan Tata Bahasa]:
@@ -329,6 +367,7 @@ ${learnedRulesStr}
 - Sambungkan konteks percakapan sebelumnya secara alami dan koheren.
 - JANGAN MENGULANG perkenalan diri (seperti "Kaiyat!", "Ngaran ku asisten AI...", "Tabe salamat...") atau menanyakan nama kembali jika sedang berada dalam percakapan lanjutan (follow-up).
 - Jika pengguna bertanya kelanjutan cerita atau menanyakan hal terkait respon sebelumnya (misal: "lalu?", "ceritakan lagi", "siapa dia?", "artinya apa?"), langsung jawab intinya sesuai alur obrolan.
+- Gunakan kosakata yang telah diajarkan pengguna di atas (seperti atei = hati, kataru = mengerti) secara konsisten dan akurat.
 - Jika diminta bercerita atau dongeng (misal: Cinderella, Palanuk), lanjutkan jalan ceritanya dengan runtut.`.trim();
 }
 
@@ -347,10 +386,11 @@ app.post("/api/learn", async (req, res) => {
     return res.status(400).json({ error: "Term dan meaning wajib diisi" });
   }
 
-  const cleanTerm = term.trim().toLowerCase();
-  const cleanMeaning = meaning.trim().toLowerCase();
-  const cleanCategory = category || "Umum";
-  const cleanExample = example || "";
+  const normalized = normalizeVocabPair(term, meaning);
+  const cleanTerm = normalized.term_maanyan;
+  const cleanMeaning = normalized.meaning_indonesian;
+  const cleanCategory = category || "Kosakata Pengguna";
+  const cleanExample = example || `${cleanTerm} = ${cleanMeaning}`;
 
   const existingIndex = learnedVocabList.findIndex(v => v.term_maanyan.toLowerCase() === cleanTerm);
   const newItem: LearnedVocabItem = {
@@ -413,43 +453,42 @@ app.post("/api/chat", async (req, res) => {
 
     let detectedLearning: any = null;
 
-    // 1. Deteksi cepat auto-learning berbasis pola regex (hemat kuota & tanpa delay LLM)
+    // 1. Deteksi cepat auto-learning & koreksi pengguna berbasis pola regex komprehensif
     const lines = message.split("\n").map((l: string) => l.trim()).filter(Boolean);
     for (const line of lines) {
-      const cleanLine = line.replace(/^(?:kata baru|koreksi|tambahkan kosakata|catat kata)\s*[:=-]?\s*/i, "").trim();
-      const match = cleanLine.match(/^([a-zA-Z0-9'`\-~\s]{2,30})\s+(?:artinya|=|maknanya|yaitu|seharusnya)\s+([a-zA-Z0-9'`\-~,\s]{2,80})$/i);
-      if (match && match[1] && match[2]) {
-        const term = match[1].trim().toLowerCase();
-        const meaning = match[2].trim().toLowerCase();
-        
-        if (!term.startsWith("apa") && !term.startsWith("kenapa") && !term.startsWith("inun") && !term.includes("?")) {
-          detectedLearning = {
-            term: term,
-            meaning: meaning,
-            category: "Kosakata Baru",
-            example: `${term} = ${meaning}`
-          };
+      const extracted = extractLearnedOrCorrectedVocab(line);
+      if (extracted && extracted.term && extracted.meaning) {
+        const normalized = normalizeVocabPair(extracted.term, extracted.meaning);
+        const cleanTerm = normalized.term_maanyan;
+        const cleanMeaning = normalized.meaning_indonesian;
+        const category = extracted.category || "Kosakata Pengguna";
 
-          const existingIdx = learnedVocabList.findIndex(v => v.term_maanyan.toLowerCase() === term);
-          const newItem: LearnedVocabItem = {
-            id: String(Date.now()),
-            term_maanyan: term,
-            meaning_indonesian: meaning,
-            category: "Kosakata Baru",
-            example_sentence: `${term} = ${meaning}`,
-            contributor: "Chat User",
-            created_at: new Date().toISOString()
-          };
+        detectedLearning = {
+          term: cleanTerm,
+          meaning: cleanMeaning,
+          category: category,
+          example: `${cleanTerm} = ${cleanMeaning}`
+        };
 
-          if (existingIdx >= 0) {
-            learnedVocabList[existingIdx] = newItem;
-          } else {
-            learnedVocabList.unshift(newItem);
-          }
+        const existingIdx = learnedVocabList.findIndex(v => v.term_maanyan.toLowerCase() === cleanTerm);
+        const newItem: LearnedVocabItem = {
+          id: String(Date.now()),
+          term_maanyan: cleanTerm,
+          meaning_indonesian: cleanMeaning,
+          category: category,
+          example_sentence: `${cleanTerm} = ${cleanMeaning}`,
+          contributor: "Chat User",
+          created_at: new Date().toISOString()
+        };
 
-          insertVocabToTurso(term, meaning, "Kosakata Baru", `${term} = ${meaning}`, "Chat User").catch(() => {});
-          break;
+        if (existingIdx >= 0) {
+          learnedVocabList[existingIdx] = newItem;
+        } else {
+          learnedVocabList.unshift(newItem);
         }
+
+        insertVocabToTurso(cleanTerm, cleanMeaning, category, `${cleanTerm} = ${cleanMeaning}`, "Chat User").catch(() => {});
+        break;
       }
     }
 
@@ -599,11 +638,12 @@ function launchTelegramPoller(tgToken: string) {
     getAiClient(),
     buildSystemInstruction,
     async (term, meaning, category, example) => {
-      console.log(`[Telegram Auto-Learn] Menambahkan kata baru: ${term} = ${meaning}`);
-      const cleanTerm = term.toLowerCase().trim();
-      const cleanMeaning = meaning.toLowerCase().trim();
+      const normalized = normalizeVocabPair(term, meaning);
+      const cleanTerm = normalized.term_maanyan;
+      const cleanMeaning = normalized.meaning_indonesian;
+      console.log(`[Telegram Auto-Learn] Menambahkan kata baru: ${cleanTerm} (Ma'anyan) = ${cleanMeaning} (Indonesia)`);
       const cleanCategory = category || "Kosakata Baru (Telegram)";
-      const cleanExample = example || "";
+      const cleanExample = example || `${cleanTerm} = ${cleanMeaning}`;
       const existingIdx = learnedVocabList.findIndex(v => v.term_maanyan.toLowerCase() === cleanTerm);
       const newItem: LearnedVocabItem = {
         id: String(Date.now()),
