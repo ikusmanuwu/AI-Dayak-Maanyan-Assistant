@@ -363,12 +363,13 @@ ${learnedVocabStr}
 [Aturan Tata Bahasa]:
 ${learnedRulesStr}
 
-=== PEDOMAN KONTINUITAS PERCAKAPAN (SANGAT PENTING) ===
+=== PEDOMAN KONTINUITAS PERCAKAPAN & PENULISAN (SANGAT PENTING) ===
 - Sambungkan konteks percakapan sebelumnya secara alami dan koheren.
 - JANGAN MENGULANG perkenalan diri (seperti "Kaiyat!", "Ngaran ku asisten AI...", "Tabe salamat...") atau menanyakan nama kembali jika sedang berada dalam percakapan lanjutan (follow-up).
-- Jika pengguna bertanya kelanjutan cerita atau menanyakan hal terkait respon sebelumnya (misal: "lalu?", "ceritakan lagi", "siapa dia?", "artinya apa?"), langsung jawab intinya sesuai alur obrolan.
+- Jika pengguna bertanya kelanjutan cerita atau menanyakan hal terkait respon sebelumnya (misal: "lalu?", "ceritakan lagi", "lanjut", "kaawe tanuhuini lanjut leh"), langsung lanjutkan cerita dengan runtut dan mengalir.
+- TUNTASKAN KALIMAT: Selalu selesaikan cerita, paragraf, atau kalimat hingga tuntas dan lengkap beserta terjemahannya. JANGAN PERNAH memotong respon di tengah kalimat.
 - Gunakan kosakata yang telah diajarkan pengguna di atas (seperti atei = hati, kataru = mengerti) secara konsisten dan akurat.
-- Jika diminta bercerita atau dongeng (misal: Cinderella, Palanuk), lanjutkan jalan ceritanya dengan runtut.`.trim();
+- Jika diminta bercerita atau dongeng (misal: tanuhui, cerita rakyat Dayak, Cinderella, Palanuk), sajikan cerita yang kaya dan hidup dengan penutupan yang rapi.`.trim();
 }
 
 // API Routes
@@ -543,11 +544,11 @@ app.post("/api/chat", async (req, res) => {
       parts: [{ text: message }]
     });
 
-    const isStory = /cerita|dongeng|cinderella|palanuk/i.test(message);
+    const isStory = /cerita|dongeng|tanuhui|kisah|cinderella|palanuk|lanjut|hikayat/i.test(message);
     const response = await generateGeminiContent(contents, {
       systemInstruction: systemInstruction,
       temperature: mode === "chat" ? 0.7 : 0.4,
-      maxOutputTokens: isStory ? 800 : (mode === "chat" ? 500 : 350)
+      maxOutputTokens: isStory ? 2500 : (mode === "chat" ? 1500 : 1000)
     });
 
     const replyText = response.text || "Puang ka'itung... Maaf terjadi kendala jaringan.";

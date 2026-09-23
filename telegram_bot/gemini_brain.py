@@ -359,14 +359,14 @@ def generate_maanyan_response(
     client = get_genai_client()
     system_instruction = build_dynamic_system_instruction(mode=mode, user_message=user_message)
 
-    # Format & compact riwayat percakapan (simpan 3-4 terakhir, pangkas teks panjang)
+    # Format & compact riwayat percakapan (simpan 4-6 terakhir)
     contents = []
     if chat_history:
-        for msg in chat_history[-4:]:
+        for msg in chat_history[-6:]:
             role = "user" if msg.get("role") == "user" else "model"
             text = (msg.get("text") or "").strip()
-            if role != "user" and len(text) > 250:
-                text = text[:250] + "..."
+            if role != "user" and len(text) > 800:
+                text = text[:800] + "..."
             contents.append(types.Content(
                 role=role,
                 parts=[types.Part.from_text(text=text)]
@@ -378,8 +378,8 @@ def generate_maanyan_response(
         parts=[types.Part.from_text(text=user_message)]
     ))
 
-    is_story = any(k in user_message.lower() for k in ["cerita", "dongeng", "cinderella", "palanuk"])
-    max_tokens = 800 if is_story else (500 if mode == "chat" else 350)
+    is_story = any(k in user_message.lower() for k in ["cerita", "dongeng", "tanuhui", "kisah", "cinderella", "palanuk", "lanjut", "hikayat"])
+    max_tokens = 2500 if is_story else (1500 if mode == "chat" else 1000)
 
     last_error = None
     for model_name in DEFAULT_MODELS:

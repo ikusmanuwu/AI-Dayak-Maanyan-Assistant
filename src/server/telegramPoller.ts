@@ -268,12 +268,12 @@ export async function startTelegramPoller(
                   parts: [{ text }]
                 });
 
-                const isStory = /cerita|dongeng|cinderella|palanuk/i.test(text);
+                const isStory = /cerita|dongeng|tanuhui|kisah|cinderella|palanuk|lanjut|hikayat/i.test(text);
                 const sysInstruction = buildSystemInstruction(mode, text);
                 const aiResp = await callGemini(contents, {
                   systemInstruction: sysInstruction,
                   temperature: mode === "chat" ? 0.7 : 0.4,
-                  maxOutputTokens: isStory ? 1500 : 1000
+                  maxOutputTokens: isStory ? 2500 : (mode === "chat" ? 1500 : 1000)
                 });
 
                 const replyText = aiResp.text || "Puang ka'itung... Maaf bot sedang berpikir.";
