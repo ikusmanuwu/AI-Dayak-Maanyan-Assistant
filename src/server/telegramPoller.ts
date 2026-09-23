@@ -47,8 +47,13 @@ export function stopTelegramPoller() {
 // Cache jawaban berulang di Telegram (TTL 15 menit)
 const tgResponseCache = new Map<string, { reply: string; timestamp: number }>();
 
-// Multi-turn conversation history per chatId untuk menjaga alur obrolan nyambung
-const userChatHistories = new Map<number | string, { role: "user" | "model"; text: string }[]>();
+// Multi-turn conversation history per chatId dengan timestamp untuk auto-reset chat basi
+interface TgHistoryItem {
+  role: "user" | "model";
+  text: string;
+  timestamp: number;
+}
+const userChatHistories = new Map<number | string, TgHistoryItem[]>();
 
 export async function startTelegramPoller(
   token: string,
@@ -65,13 +70,13 @@ export async function startTelegramPoller(
   async function callGemini(contents: any, config: any) {
     const modelsToTry = [
       "gemini-3.5-flash",
-      "gemini-3.1-flash-lite",
       "gemini-3-flash-preview",
+      "gemini-3.1-flash-lite",
       "gemini-flash-latest"
     ];
 
     const finalConfig = {
-      maxOutputTokens: 600,
+      maxOutputTokens: 1024,
       ...config
     };
 
@@ -126,7 +131,7 @@ export async function startTelegramPoller(
               const sender = update.message.from?.first_name || "Sahabat";
 
               // Handle commands
-              if (text.startsWith("/start") || text.startsWith("/reset")) {
+              if (text.startsWith("/start") || text.startsWith("/reset") || text.startsWith("/clear") || text.startsWith("/baru")) {
                 userChatHistories.delete(chatId);
                 const welcomeMsg = `Tabe salamat! Halo kak ${sender}!\n\n` +
                   `Saya adalah *Dayak Ma'anyan AI Assistant*.\n` +
@@ -136,12 +141,22 @@ export async function startTelegramPoller(
                   `• "Bahasa Ma'anyan makan apa?"\n` +
                   `• "Inun kabar?"\n` +
                   `• "/latihan" - Mode kuis interaktif\n` +
+                  `• "/reset" - Mulai percakapan dari awal\n` +
                   `• "Kata baru: waday artinya kue"`;
                 await sendTelegramMessage(token, chatId, welcomeMsg);
                 continue;
               }
 
-              const history = userChatHistories.get(chatId) || [];
+              let history = userChatHistories.get(chatId) || [];
+              // Auto-reset jika obrolan terakhir sudah lebih dari 10 menit
+              if (history.length > 0) {
+                const lastMsg = history[history.length - 1];
+                if (Date.now() - lastMsg.timestamp > 10 * 60 * 1000) {
+                  userChatHistories.delete(chatId);
+                  history = [];
+                }
+              }
+
               const isLatihan = text.toLowerCase().includes("/latihan") || text.toLowerCase().includes("latihan");
               const mode = isLatihan ? "latihan" : "chat";
 
@@ -187,8 +202,8 @@ export async function startTelegramPoller(
               if (mode === "chat" && tryLocalMatch && (history.length === 0 || isExplicitDictionaryQuery)) {
                 const localMatch = tryLocalMatch(text);
                 if (localMatch) {
-                  history.push({ role: "user", text });
-                  history.push({ role: "model", text: localMatch });
+                  history.push({ role: "user", text, timestamp: Date.now() });
+                  history.push({ role: "model", text: localMatch, timestamp: Date.now() });
                   userChatHistories.set(chatId, history.slice(-10));
                   await sendTelegramMessage(token, chatId, localMatch);
                   continue;
@@ -199,8 +214,8 @@ export async function startTelegramPoller(
               const cacheKey = `${mode}:${text.trim().toLowerCase()}`;
               const cached = tgResponseCache.get(cacheKey);
               if (history.length === 0 && cached && Date.now() - cached.timestamp < 15 * 60 * 1000) {
-                history.push({ role: "user", text });
-                history.push({ role: "model", text: cached.reply });
+                history.push({ role: "user", text, timestamp: Date.now() });
+                history.push({ role: "model", text: cached.reply, timestamp: Date.now() });
                 userChatHistories.set(chatId, history.slice(-10));
                 await sendTelegramMessage(token, chatId, cached.reply);
                 continue;
@@ -211,13 +226,10 @@ export async function startTelegramPoller(
                 // Tampilkan indikator status "sedang mengetik..." di Telegram
                 sendChatAction(token, chatId, "typing").catch(() => {});
 
-                // Format & compact riwayat percakapan agar obrolan nyambung
+                // Format riwayat percakapan agar obrolan nyambung
                 const contents: any[] = [];
                 for (const item of history.slice(-6)) {
                   let textPart = item.text.trim();
-                  if (item.role === "model" && textPart.length > 800) {
-                    textPart = textPart.substring(0, 800) + "...";
-                  }
                   contents.push({
                     role: item.role === "user" ? "user" : "model",
                     parts: [{ text: textPart }]
@@ -233,7 +245,7 @@ export async function startTelegramPoller(
                 const aiResp = await callGemini(contents, {
                   systemInstruction: sysInstruction,
                   temperature: mode === "chat" ? 0.7 : 0.4,
-                  maxOutputTokens: isStory ? 800 : (mode === "chat" ? 500 : 350)
+                  maxOutputTokens: isStory ? 1500 : 1000
                 });
 
                 const replyText = aiResp.text || "Puang ka'itung... Maaf bot sedang berpikir.";
@@ -246,8 +258,8 @@ export async function startTelegramPoller(
                     }
                   }
                   // Simpan riwayat chat pengguna agar follow-up chat nyambung terus
-                  history.push({ role: "user", text });
-                  history.push({ role: "model", text: replyText });
+                  history.push({ role: "user", text, timestamp: Date.now() });
+                  history.push({ role: "model", text: replyText, timestamp: Date.now() });
                   userChatHistories.set(chatId, history.slice(-10));
                 }
                 await sendTelegramMessage(token, chatId, replyText);
