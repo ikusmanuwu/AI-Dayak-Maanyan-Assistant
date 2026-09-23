@@ -54,6 +54,11 @@ async function generateGeminiContent(contents: any, config: any) {
     "gemini-flash-latest"
   ];
 
+  const finalConfig = {
+    maxOutputTokens: 600,
+    ...config
+  };
+
   let lastError: any = null;
   for (let attempt = 0; attempt < 2; attempt++) {
     for (const model of modelsToTry) {
@@ -61,7 +66,7 @@ async function generateGeminiContent(contents: any, config: any) {
         return await ai.models.generateContent({
           model,
           contents,
-          config
+          config: finalConfig
         });
       } catch (err: any) {
         lastError = err;
@@ -77,6 +82,90 @@ async function generateGeminiContent(contents: any, config: any) {
     }
   }
   throw lastError || new Error("Semua model Gemini sedang tidak dapat dihubungi.");
+}
+
+// In-Memory Response Cache untuk menghindari request berulang (TTL 15 menit)
+const responseCache = new Map<string, { reply: string; timestamp: number }>();
+
+// Tier-1: Local Instant Dictionary & Greeting Matcher (0 Token Digunakan, <1ms)
+function tryLocalDictionaryMatch(text: string): string | null {
+  const clean = text.trim().toLowerCase().replace(/[?!.,]/g, "").replace(/\s+/g, " ");
+
+  // 1. Salam & Percakapan Standar
+  if (clean === "selamat pagi" || clean === "pagi" || clean === "kaiyat") {
+    return "Kaiyat! (Selamat pagi!) Tabe salamat, inun kabar nu ta'ati? (Bagaimana kabarmu sekarang?)";
+  }
+  if (clean === "selamat siang" || clean === "selamat sore" || clean === "siang" || clean === "sore" || clean === "kamerer") {
+    return "Kamerer! (Selamat siang/sore!) Tabe salamat, inun luan nu dangan aku? (Ada urusan apa denganku?)";
+  }
+  if (clean === "selamat malam" || clean === "malam" || clean === "kalamarian") {
+    return "Kalamarian! (Selamat malam!) Tabe salamat, haut kuman kalamarian kah? (Sudah makan malamkah?)";
+  }
+  if (clean === "apa kabar" || clean === "inun kabar" || clean === "inun habar" || clean === "kabar") {
+    return "Kabar ma'at! (Kabar baik!). Aku yiti asisten AI bahasa Dayak Ma'anyan. Hanyu dainun kabar nu? (Kamu bagaimana kabarmu?)";
+  }
+  if (clean === "terima kasih" || clean === "makasih" || clean === "tarima kasih") {
+    return "Tarima kasih ganta! (Terima kasih kembali / Sama-sama!). Sanang gina'u nulung hanyu. (Senang rasanya membantu kamu.)";
+  }
+  if (clean === "siapa namamu" || clean === "hie ngaran nu" || clean === "siapa nama kamu") {
+    return "Ngaran ku asisten AI Dayak Ma'anyan. Aku nulung hanyu bapaner nelang balajar basa ite. (Namaku asisten AI Dayak Ma'anyan. Aku membantumu berbicara dan belajar bahasa kita.)";
+  }
+
+  // 2. Pola Pertanyaan Kamus Kata Tunggal:
+  // "apa arti <kata>", "arti <kata>", "apa artinya <kata>", "bahasa maanyannya <kata> apa?"
+  let targetWord = "";
+  let direction: "maanyan_to_indo" | "indo_to_maanyan" | "both" = "both";
+
+  const matchArti = clean.match(/^(?:apa\s+)?(?:artinya|arti|artian|makna(?:nya)?)\s+(?:dari\s+|kata\s+)?([a-zA-Z0-9'`\-~]+)$/i);
+  const matchKataArti = clean.match(/^([a-zA-Z0-9'`\-~]+)\s+(?:artinya|artian|maknanya)\s*(?:apa|inun)?$/i);
+  const matchBasaMaanyan = clean.match(/^(?:apa\s+)?(?:bahasa\s+maanyan|bahasa\s+ma'anyan|basa\s+maanyan|bahasa\s+dayak)(?:nya|\s+dari)?\s+([a-zA-Z0-9'`\-~]+)(?:\s+apa)?$/i);
+  const matchBasaIndo = clean.match(/^(?:apa\s+)?(?:bahasa\s+indonesia|bahasa\s+indo)(?:nya|\s+dari)?\s+([a-zA-Z0-9'`\-~]+)(?:\s+apa)?$/i);
+
+  if (matchArti && matchArti[1]) {
+    targetWord = matchArti[1].trim();
+    direction = "both";
+  } else if (matchKataArti && matchKataArti[1]) {
+    targetWord = matchKataArti[1].trim();
+    direction = "both";
+  } else if (matchBasaMaanyan && matchBasaMaanyan[1]) {
+    targetWord = matchBasaMaanyan[1].trim();
+    direction = "indo_to_maanyan";
+  } else if (matchBasaIndo && matchBasaIndo[1]) {
+    targetWord = matchBasaIndo[1].trim();
+    direction = "maanyan_to_indo";
+  }
+
+  if (targetWord && targetWord.length >= 2) {
+    const wordLower = targetWord.toLowerCase();
+    const allLearned = learnedVocabList.map(v => ({ term: v.term_maanyan, meaning: v.meaning_indonesian, category: v.category, notes: v.example_sentence || "" }));
+    const fullDict = [...allLearned, ...CORE_VOCABULARY];
+
+    if (direction === "maanyan_to_indo" || direction === "both") {
+      const found = fullDict.find(v => {
+        const t = v.term.toLowerCase();
+        return t === wordLower || t.split("/").map(s => s.trim()).includes(wordLower);
+      });
+      if (found) {
+        let res = `*${found.term}* hang bahasa Indonesia artinya **${found.meaning}**.\n\n📖 **Kategori:** ${found.category || "Kosakata Umum"}`;
+        if (found.notes) res += `\n📝 **Contoh/Catatan:** ${found.notes}`;
+        return res;
+      }
+    }
+
+    if (direction === "indo_to_maanyan" || direction === "both") {
+      const found = fullDict.find(v => {
+        const m = v.meaning.toLowerCase();
+        return m === wordLower || m.split("/").map(s => s.trim()).includes(wordLower);
+      });
+      if (found) {
+        let res = `Bahasa Dayak Ma'anyan untuk **${found.meaning}** adalah **${found.term}**.\n\n📖 **Kategori:** ${found.category || "Kosakata Umum"}`;
+        if (found.notes) res += `\n📝 **Contoh/Catatan:** ${found.notes}`;
+        return res;
+      }
+    }
+  }
+
+  return null;
 }
 
 // In-Memory Database untuk Web Simulator (Sinkron dengan Turso / SQLite logic di Python)
@@ -312,7 +401,7 @@ app.post("/api/turso-init", async (req, res) => {
   res.json(result);
 });
 
-// API Chat dengan Gemini (Resilient Fallback) + Auto-Learning Detection
+// API Chat dengan Gemini (Resilient Fallback) + Tier-1 Local Match + Auto-Learning Detection
 app.post("/api/chat", async (req, res) => {
   try {
     const { message, mode = "chat", history = [] } = req.body;
@@ -325,14 +414,12 @@ app.post("/api/chat", async (req, res) => {
     // 1. Deteksi cepat auto-learning berbasis pola regex (hemat kuota & tanpa delay LLM)
     const lines = message.split("\n").map((l: string) => l.trim()).filter(Boolean);
     for (const line of lines) {
-      // Pola: "kata artinya arti" atau "kata = arti" atau "kata baru: kata artinya arti"
       const cleanLine = line.replace(/^(?:kata baru|koreksi|tambahkan kosakata|catat kata)\s*[:=-]?\s*/i, "").trim();
       const match = cleanLine.match(/^([a-zA-Z0-9'`\-~\s]{2,30})\s+(?:artinya|=|maknanya|yaitu|seharusnya)\s+([a-zA-Z0-9'`\-~,\s]{2,80})$/i);
       if (match && match[1] && match[2]) {
         const term = match[1].trim().toLowerCase();
         const meaning = match[2].trim().toLowerCase();
         
-        // Pastikan bukan sekadar kalimat tanya seperti "apa artinya kuman"
         if (!term.startsWith("apa") && !term.startsWith("kenapa") && !term.startsWith("inun") && !term.includes("?")) {
           detectedLearning = {
             term: term,
@@ -364,16 +451,46 @@ app.post("/api/chat", async (req, res) => {
       }
     }
 
-    // 2. Generate balasan dengan dynamic system instruction
+    // 2. OPTIMASI TIER-1: Coba pencocokan kamus lokal & salam langsung (0 Token Digunakan!)
+    if (mode === "chat" && !detectedLearning) {
+      const localMatch = tryLocalDictionaryMatch(message);
+      if (localMatch) {
+        return res.json({
+          reply: localMatch,
+          detectedLearning: null,
+          totalLearned: learnedVocabList.length,
+          optimizedVia: "local_cache"
+        });
+      }
+    }
+
+    // 3. OPTIMASI TIER-2: Cek Response Cache untuk pertanyaan identik dalam 15 menit
+    const cacheKey = `${mode}:${message.trim().toLowerCase()}`;
+    const cached = responseCache.get(cacheKey);
+    const now = Date.now();
+    if (cached && now - cached.timestamp < 15 * 60 * 1000 && !detectedLearning) {
+      return res.json({
+        reply: cached.reply,
+        detectedLearning: null,
+        totalLearned: learnedVocabList.length,
+        optimizedVia: "response_cache"
+      });
+    }
+
+    // 4. Generate balasan dengan dynamic system instruction
     const systemInstruction = buildSystemInstruction(mode as "chat" | "latihan", message);
 
-    // Format history
+    // Format & compact history (simpan maksimal 3-4 turn, pangkas teks asisten yang panjang)
     const contents: any[] = [];
     if (Array.isArray(history)) {
-      for (const item of history.slice(-6)) {
+      for (const item of history.slice(-4)) {
+        let text = (item.text || "").trim();
+        if (item.role !== "user" && text.length > 250) {
+          text = text.substring(0, 250) + "...";
+        }
         contents.push({
           role: item.role === "user" ? "user" : "model",
-          parts: [{ text: item.text }]
+          parts: [{ text }]
         });
       }
     }
@@ -382,13 +499,27 @@ app.post("/api/chat", async (req, res) => {
       parts: [{ text: message }]
     });
 
+    const isStory = /cerita|dongeng|cinderella|palanuk/i.test(message);
     const response = await generateGeminiContent(contents, {
       systemInstruction: systemInstruction,
-      temperature: mode === "chat" ? 0.7 : 0.4
+      temperature: mode === "chat" ? 0.7 : 0.4,
+      maxOutputTokens: isStory ? 800 : (mode === "chat" ? 500 : 350)
     });
 
+    const replyText = response.text || "Puang ka'itung... Maaf terjadi kendala jaringan.";
+
+    // Simpan ke response cache
+    if (replyText && !replyText.startsWith("⚠️")) {
+      responseCache.set(cacheKey, { reply: replyText, timestamp: Date.now() });
+      // Batasi ukuran cache maksimal 100 entri
+      if (responseCache.size > 100) {
+        const firstKey = responseCache.keys().next().value;
+        if (firstKey) responseCache.delete(firstKey);
+      }
+    }
+
     res.json({
-      reply: response.text || "Puang ka'itung... Maaf terjadi kendala jaringan.",
+      reply: replyText,
       detectedLearning: detectedLearning,
       totalLearned: learnedVocabList.length
     });
@@ -490,7 +621,8 @@ function launchTelegramPoller(tgToken: string) {
         cleanExample,
         "Pengguna Telegram Live"
       );
-    }
+    },
+    tryLocalDictionaryMatch
   );
 }
 

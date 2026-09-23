@@ -44,11 +44,15 @@ export function stopTelegramPoller() {
   botStatus.isRunning = false;
 }
 
+// Cache jawaban berulang di Telegram (TTL 15 menit)
+const tgResponseCache = new Map<string, { reply: string; timestamp: number }>();
+
 export async function startTelegramPoller(
   token: string,
   aiClient: any,
   buildSystemInstruction: (mode: "chat" | "latihan", contextText?: string) => string,
-  onLearn: (term: string, meaning: string, category: string, example?: string) => Promise<void> | void
+  onLearn: (term: string, meaning: string, category: string, example?: string) => Promise<void> | void,
+  tryLocalMatch?: (text: string) => string | null
 ) {
   if (pollingActive) return;
   pollingActive = true;
@@ -63,6 +67,11 @@ export async function startTelegramPoller(
       "gemini-flash-latest"
     ];
 
+    const finalConfig = {
+      maxOutputTokens: 600,
+      ...config
+    };
+
     let lastError: any = null;
     // Coba loop dengan exponential backoff jika terkena spike traffic (503) atau rate limit sementara (429)
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -71,19 +80,17 @@ export async function startTelegramPoller(
           return await aiClient.models.generateContent({
             model,
             contents,
-            config
+            config: finalConfig
           });
         } catch (e: any) {
           lastError = e;
           const status = e?.status || e?.statusCode;
           console.warn(`[Telegram Poller] Model ${model} percobaan #${attempt + 1} gagal (${status || e?.message}).`);
-          // Jika terkena 503 (high demand) atau 429 (rate limit), beri jeda sejenak sebelum coba model lain
           if (status === 503 || status === 429) {
             await new Promise(r => setTimeout(r, 1200));
           }
         }
       }
-      // Tunggu 2.5 detik sebelum percobaan kedua
       if (attempt === 0) {
         await new Promise(r => setTimeout(r, 2500));
       }
@@ -170,18 +177,44 @@ export async function startTelegramPoller(
                 }
               }
 
+              // 1. Coba pencocokan kamus lokal & salam instan (0 Token Gemini!)
+              if (mode === "chat" && tryLocalMatch) {
+                const localMatch = tryLocalMatch(text);
+                if (localMatch) {
+                  await sendTelegramMessage(token, chatId, localMatch);
+                  continue;
+                }
+              }
+
+              // 2. Cek Response Cache Telegram (0 Token untuk pertanyaan berulang)
+              const cacheKey = `${mode}:${text.trim().toLowerCase()}`;
+              const cached = tgResponseCache.get(cacheKey);
+              if (cached && Date.now() - cached.timestamp < 15 * 60 * 1000) {
+                await sendTelegramMessage(token, chatId, cached.reply);
+                continue;
+              }
+
               // Generate AI response
               try {
                 // Tampilkan indikator status "sedang mengetik..." di Telegram
                 sendChatAction(token, chatId, "typing").catch(() => {});
 
+                const isStory = /cerita|dongeng|cinderella|palanuk/i.test(text);
                 const sysInstruction = buildSystemInstruction(mode, text);
                 const aiResp = await callGemini([{ role: "user", parts: [{ text }] }], {
                   systemInstruction: sysInstruction,
-                  temperature: mode === "chat" ? 0.7 : 0.4
+                  temperature: mode === "chat" ? 0.7 : 0.4,
+                  maxOutputTokens: isStory ? 800 : (mode === "chat" ? 500 : 350)
                 });
 
                 const replyText = aiResp.text || "Puang ka'itung... Maaf bot sedang berpikir.";
+                if (replyText && !replyText.startsWith("⚠️")) {
+                  tgResponseCache.set(cacheKey, { reply: replyText, timestamp: Date.now() });
+                  if (tgResponseCache.size > 150) {
+                    const firstKey = tgResponseCache.keys().next().value;
+                    if (firstKey) tgResponseCache.delete(firstKey);
+                  }
+                }
                 await sendTelegramMessage(token, chatId, replyText);
               } catch (err: any) {
                 console.error("[Telegram Reply Error]", err);
