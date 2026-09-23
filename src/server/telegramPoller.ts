@@ -47,6 +47,9 @@ export function stopTelegramPoller() {
 // Cache jawaban berulang di Telegram (TTL 15 menit)
 const tgResponseCache = new Map<string, { reply: string; timestamp: number }>();
 
+// Multi-turn conversation history per chatId untuk menjaga alur obrolan nyambung
+const userChatHistories = new Map<number | string, { role: "user" | "model"; text: string }[]>();
+
 export async function startTelegramPoller(
   token: string,
   aiClient: any,
@@ -123,7 +126,8 @@ export async function startTelegramPoller(
               const sender = update.message.from?.first_name || "Sahabat";
 
               // Handle commands
-              if (text.startsWith("/start")) {
+              if (text.startsWith("/start") || text.startsWith("/reset")) {
+                userChatHistories.delete(chatId);
                 const welcomeMsg = `Tabe salamat! Halo kak ${sender}!\n\n` +
                   `Saya adalah *Dayak Ma'anyan AI Assistant*.\n` +
                   `Kamu bisa tanya terjemahan, berlatih percakapan, atau bahkan mengajariku kosakata Dayak Ma'anyan baru!\n\n` +
@@ -137,6 +141,7 @@ export async function startTelegramPoller(
                 continue;
               }
 
+              const history = userChatHistories.get(chatId) || [];
               const isLatihan = text.toLowerCase().includes("/latihan") || text.toLowerCase().includes("latihan");
               const mode = isLatihan ? "latihan" : "chat";
 
@@ -177,19 +182,26 @@ export async function startTelegramPoller(
                 }
               }
 
-              // 1. Coba pencocokan kamus lokal & salam instan (0 Token Gemini!)
-              if (mode === "chat" && tryLocalMatch) {
+              // 1. Coba pencocokan kamus lokal & salam instan (Hanya jika chat baru atau query kamus eksplisit)
+              const isExplicitDictionaryQuery = /^(?:apa\s+)?(?:artinya|arti|artian|makna|bahasa\s+maanyan|basa\s+maanyan)\s+/i.test(text);
+              if (mode === "chat" && tryLocalMatch && (history.length === 0 || isExplicitDictionaryQuery)) {
                 const localMatch = tryLocalMatch(text);
                 if (localMatch) {
+                  history.push({ role: "user", text });
+                  history.push({ role: "model", text: localMatch });
+                  userChatHistories.set(chatId, history.slice(-10));
                   await sendTelegramMessage(token, chatId, localMatch);
                   continue;
                 }
               }
 
-              // 2. Cek Response Cache Telegram (0 Token untuk pertanyaan berulang)
+              // 2. Cek Response Cache Telegram (Hanya untuk pesan awal tanpa riwayat)
               const cacheKey = `${mode}:${text.trim().toLowerCase()}`;
               const cached = tgResponseCache.get(cacheKey);
-              if (cached && Date.now() - cached.timestamp < 15 * 60 * 1000) {
+              if (history.length === 0 && cached && Date.now() - cached.timestamp < 15 * 60 * 1000) {
+                history.push({ role: "user", text });
+                history.push({ role: "model", text: cached.reply });
+                userChatHistories.set(chatId, history.slice(-10));
                 await sendTelegramMessage(token, chatId, cached.reply);
                 continue;
               }
@@ -199,9 +211,26 @@ export async function startTelegramPoller(
                 // Tampilkan indikator status "sedang mengetik..." di Telegram
                 sendChatAction(token, chatId, "typing").catch(() => {});
 
+                // Format & compact riwayat percakapan agar obrolan nyambung
+                const contents: any[] = [];
+                for (const item of history.slice(-6)) {
+                  let textPart = item.text.trim();
+                  if (item.role === "model" && textPart.length > 800) {
+                    textPart = textPart.substring(0, 800) + "...";
+                  }
+                  contents.push({
+                    role: item.role === "user" ? "user" : "model",
+                    parts: [{ text: textPart }]
+                  });
+                }
+                contents.push({
+                  role: "user",
+                  parts: [{ text }]
+                });
+
                 const isStory = /cerita|dongeng|cinderella|palanuk/i.test(text);
                 const sysInstruction = buildSystemInstruction(mode, text);
-                const aiResp = await callGemini([{ role: "user", parts: [{ text }] }], {
+                const aiResp = await callGemini(contents, {
                   systemInstruction: sysInstruction,
                   temperature: mode === "chat" ? 0.7 : 0.4,
                   maxOutputTokens: isStory ? 800 : (mode === "chat" ? 500 : 350)
@@ -209,11 +238,17 @@ export async function startTelegramPoller(
 
                 const replyText = aiResp.text || "Puang ka'itung... Maaf bot sedang berpikir.";
                 if (replyText && !replyText.startsWith("⚠️")) {
-                  tgResponseCache.set(cacheKey, { reply: replyText, timestamp: Date.now() });
-                  if (tgResponseCache.size > 150) {
-                    const firstKey = tgResponseCache.keys().next().value;
-                    if (firstKey) tgResponseCache.delete(firstKey);
+                  if (history.length === 0) {
+                    tgResponseCache.set(cacheKey, { reply: replyText, timestamp: Date.now() });
+                    if (tgResponseCache.size > 150) {
+                      const firstKey = tgResponseCache.keys().next().value;
+                      if (firstKey) tgResponseCache.delete(firstKey);
+                    }
                   }
+                  // Simpan riwayat chat pengguna agar follow-up chat nyambung terus
+                  history.push({ role: "user", text });
+                  history.push({ role: "model", text: replyText });
+                  userChatHistories.set(chatId, history.slice(-10));
                 }
                 await sendTelegramMessage(token, chatId, replyText);
               } catch (err: any) {

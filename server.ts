@@ -325,9 +325,11 @@ ${learnedVocabStr}
 [Aturan Tata Bahasa]:
 ${learnedRulesStr}
 
-=== PRINSIP PENTING ===
-- Responsif, lestarikan keaslian bahasa Dayak Ma'anyan.
-- Jika diminta bercerita atau dongeng (misal: Cinderella, Palanuk), ceritakan dalam bahasa Dayak Ma'anyan yang runtut dan sertakan terjemahan bahasa Indonesia.`.trim();
+=== PEDOMAN KONTINUITAS PERCAKAPAN (SANGAT PENTING) ===
+- Sambungkan konteks percakapan sebelumnya secara alami dan koheren.
+- JANGAN MENGULANG perkenalan diri (seperti "Kaiyat!", "Ngaran ku asisten AI...", "Tabe salamat...") atau menanyakan nama kembali jika sedang berada dalam percakapan lanjutan (follow-up).
+- Jika pengguna bertanya kelanjutan cerita atau menanyakan hal terkait respon sebelumnya (misal: "lalu?", "ceritakan lagi", "siapa dia?", "artinya apa?"), langsung jawab intinya sesuai alur obrolan.
+- Jika diminta bercerita atau dongeng (misal: Cinderella, Palanuk), lanjutkan jalan ceritanya dengan runtut.`.trim();
 }
 
 // API Routes
@@ -451,8 +453,11 @@ app.post("/api/chat", async (req, res) => {
       }
     }
 
-    // 2. OPTIMASI TIER-1: Coba pencocokan kamus lokal & salam langsung (0 Token Digunakan!)
-    if (mode === "chat" && !detectedLearning) {
+    // 2. OPTIMASI TIER-1: Coba pencocokan kamus lokal & salam langsung (Hanya jika awal percakapan atau pertanyaan kamus eksplisit)
+    const isExplicitDictionaryQuery = /^(?:apa\s+)?(?:artinya|arti|artian|makna|bahasa\s+maanyan|basa\s+maanyan)\s+/i.test(message.trim());
+    const isInitialGreeting = Array.isArray(history) && history.length === 0;
+
+    if (mode === "chat" && !detectedLearning && (isInitialGreeting || isExplicitDictionaryQuery)) {
       const localMatch = tryLocalDictionaryMatch(message);
       if (localMatch) {
         return res.json({
@@ -464,11 +469,11 @@ app.post("/api/chat", async (req, res) => {
       }
     }
 
-    // 3. OPTIMASI TIER-2: Cek Response Cache untuk pertanyaan identik dalam 15 menit
+    // 3. OPTIMASI TIER-2: Cek Response Cache untuk pertanyaan pembuka yang identik (Hanya untuk pesan awal tanpa riwayat)
     const cacheKey = `${mode}:${message.trim().toLowerCase()}`;
     const cached = responseCache.get(cacheKey);
     const now = Date.now();
-    if (cached && now - cached.timestamp < 15 * 60 * 1000 && !detectedLearning) {
+    if (isInitialGreeting && cached && now - cached.timestamp < 15 * 60 * 1000 && !detectedLearning) {
       return res.json({
         reply: cached.reply,
         detectedLearning: null,
@@ -480,13 +485,13 @@ app.post("/api/chat", async (req, res) => {
     // 4. Generate balasan dengan dynamic system instruction
     const systemInstruction = buildSystemInstruction(mode as "chat" | "latihan", message);
 
-    // Format & compact history (simpan maksimal 3-4 turn, pangkas teks asisten yang panjang)
+    // Format & compact history (simpan riwayat percakapan hingga 6 giliran agar obrolan nyambung)
     const contents: any[] = [];
     if (Array.isArray(history)) {
-      for (const item of history.slice(-4)) {
+      for (const item of history.slice(-6)) {
         let text = (item.text || "").trim();
-        if (item.role !== "user" && text.length > 250) {
-          text = text.substring(0, 250) + "...";
+        if (item.role !== "user" && text.length > 800) {
+          text = text.substring(0, 800) + "...";
         }
         contents.push({
           role: item.role === "user" ? "user" : "model",
