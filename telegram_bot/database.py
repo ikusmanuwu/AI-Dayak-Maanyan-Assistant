@@ -88,6 +88,22 @@ def init_db():
             for cat, lim in default_limits:
                 cursor.execute("INSERT OR IGNORE INTO budget_limits (category, monthly_limit) VALUES (?, ?)", (cat, lim))
 
+        # Inisialisasi contoh transaksi gaji per 25 September jika tabel masih kosong
+        cursor.execute("SELECT COUNT(*) as cnt FROM transactions")
+        if cursor.fetchone()["cnt"] == 0:
+            cursor.execute("""
+                INSERT INTO transactions (user_id, username, type, amount, category, notes, transaction_date)
+                VALUES (1, 'Icus', 'income', 25000000, 'Gaji', 'Gaji Bulanan Masuk', '2026-09-25')
+            """)
+            cursor.execute("""
+                INSERT INTO transactions (user_id, username, type, amount, category, notes, transaction_date)
+                VALUES (1, 'Icus', 'expense', 1617000, 'Apartemen', 'IPL & Listrik Apartemen', '2026-09-25')
+            """)
+            cursor.execute("""
+                INSERT INTO transactions (user_id, username, type, amount, category, notes, transaction_date)
+                VALUES (1, 'Eva', 'expense', 2250000, 'Makan & Belanja', 'Belanja Bulanan Sayur & Daging', '2026-09-25')
+            """)
+
         # Tabel sesi pengguna (Mode Percakapan & Status Latihan)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS user_sessions (

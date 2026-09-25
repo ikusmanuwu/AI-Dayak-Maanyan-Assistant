@@ -228,6 +228,71 @@ async def memori_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines.append("\n✨ _Seluruh memori ini disuntikkan secara dinamis ke instruksi Gemini setiap kali bot merespon!_")
     await update.message.reply_text("\n".join(lines), parse_mode=constants.ParseMode.MARKDOWN)
 
+async def gaji_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler untuk mencatat transaksi gaji dan langsung mengalihkan periode anggaran."""
+    user = update.effective_user
+    args = context.args
+    raw_text = " ".join(args) if args else "25000000"
+    
+    # Ekstrak angka dari teks
+    import re
+    numbers = re.findall(r'\d+', raw_text.replace(".", "").replace(",", ""))
+    amount = float(numbers[0]) if numbers else 25000000.0
+    today_str = datetime.now().strftime("%Y-%m-%d")
+
+    record_transaction(
+        user_id=user.id,
+        username=user.first_name,
+        trx_type="income",
+        amount=amount,
+        category="Gaji",
+        notes=f"Pemasukan Gaji {raw_text}",
+        transaction_date=today_str
+    )
+
+    summary = get_budget_status_summary()
+    period = summary["period_info"]
+
+    msg = f"""
+🎉 *Transaksi Pemasukan Gaji Berhasil Dicatat!*
+💵 Nominal: *Rp {int(amount):,}*
+🗓 *Periode Anggaran Baru Langsung Aktif!*
+👉 *{period['label']}*
+
+_Aturan Cut-off: Hari H transaksi gaji dicatat langsung menjadi awal periode baru. Semua pengeluaran hari ini dan seterusnya otomatis memotong kuota anggaran baru._
+"""
+    await update.message.reply_text(msg, parse_mode=constants.ParseMode.MARKDOWN)
+
+async def catat_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler untuk mencatat pengeluaran cepat: /catat [nominal] [kategori] [catatan]"""
+    user = update.effective_user
+    args = context.args
+    if not args:
+        await update.message.reply_text("Format: `/catat <nominal> <kategori> <keterangan>`\nContoh: `/catat 50000 Makan makan siang nasi padang`", parse_mode=constants.ParseMode.MARKDOWN)
+        return
+        
+    import re
+    first_arg = args[0].replace(".", "").replace(",", "").lower().replace("k", "000").replace("rb", "000").replace("jt", "000000")
+    numbers = re.findall(r'\d+', first_arg)
+    amount = float(numbers[0]) if numbers else 0.0
+    category = args[1] if len(args) > 1 else "Lain-lain"
+    notes = " ".join(args[2:]) if len(args) > 2 else category
+
+    record_transaction(
+        user_id=user.id,
+        username=user.first_name,
+        trx_type="expense",
+        amount=amount,
+        category=category,
+        notes=notes
+    )
+
+    summary = get_budget_status_summary()
+    await update.message.reply_text(
+        f"✅ *Pengeluaran Dicatat:*\n💸 *Rp {int(amount):,}* ({category})\n📝 _{notes}_\n\n🛡 *Sisa Kuota Anggaran Total:* Rp {int(summary['remaining_total']):,}",
+        parse_mode=constants.ParseMode.MARKDOWN
+    )
+
 async def anggaran_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler untuk perintah /anggaran atau /budget."""
     summary = get_budget_status_summary()
@@ -416,6 +481,8 @@ def main():
     app.add_handler(CommandHandler("memori", memori_command))
     app.add_handler(CommandHandler("anggaran", anggaran_command))
     app.add_handler(CommandHandler("budget", anggaran_command))
+    app.add_handler(CommandHandler("gaji", gaji_command))
+    app.add_handler(CommandHandler("catat", catat_command))
     app.add_handler(CommandHandler("stats", stats_command))
 
     # Daftarkan Callback Query Handler (tombol inline)
