@@ -337,7 +337,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Simpan riwayat percakapan
     history.append({"role": "user", "text": user_text})
     history.append({"role": "model", "text": bot_reply})
-    user_chat_histories[user_id] = history[-10:] # simpan 10 terakhir
+    user_chat_histories[user_id] = history[-20:] # simpan 20 percakapan terakhir agar konteks data & diskusi utuh
 
     # Kirim balasan ke Telegram
     await update.message.reply_text(

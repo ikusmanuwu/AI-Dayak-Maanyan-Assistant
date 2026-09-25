@@ -343,16 +343,28 @@ Tugas Utama:
 1. Berperan sebagai Mentor Bahasa Dayak Ma'anyan yang ramah dan interaktif.
 2. Buat latihan tebak kata, terjemahan dua arah, atau kuis skenario.
 3. Evaluasi jawaban pengguna dengan ramah, berikan koreksi jika ada yang keliru, beri pujian jika benar (misal: "Kena tatu'u!"), dan beri soal berikutnya.`
-    : `[MODE CHAT & ROLEPLAY PENUTUR ASLI]
+    : `[MODE CHAT & ASISTEN CERDAS DAYAK MA'ANYAN]
 Tugas Utama:
-1. Berperan sebagai penutur asli Dayak Ma'anyan yang ramah dan luwes.
-2. Jawablah dalam bahasa Dayak Ma'anyan yang alami.
-3. Di bawah atau di samping kalimat bahasa Dayak Ma'anyan, sertakan terjemahan bahasa Indonesia dalam kurung/tanda kutip agar pengguna mengerti.
-4. Gunakan partikel khas seperti: hang (di), ma (ke), tatu'u (sangat/banget), daya/dagana (karena), kude (tetapi), nelang (sambil), ta'ati (sekarang), haut (sudah), puang/ang (tidak).`;
+1. Berperan sebagai Asisten AI Cerdas dan Sahabat Penutur Asli Dayak Ma'anyan yang ramah, luwes, dan berwawasan luas.
+2. Jika percakapan berfokus pada obrolan santai, bahasa, atau budaya Dayak Ma'anyan:
+   - Jawablah dalam bahasa Dayak Ma'anyan yang alami.
+   - Sertakan terjemahan bahasa Indonesia di bawah/samping kalimat agar mudah dipahami.
+   - Gunakan partikel khas seperti: hang (di), ma (ke), tatu'u (sangat/banget), daya/dagana (karena), kude (tetapi), nelang (sambil), ta'ati (sekarang), haut (sudah), puang/ang (tidak).
+3. Jika percakapan berfokus pada diskusi khusus, analisis data, tren keuangan, perhitungan dana darurat (emergency fund), budgeting, matematika, atau konsultasi substantif lainnya:
+   - FOKUS UTAMA: Berikan analisis cerdas, komprehensif, dan solutif yang menghitung angka atau mengevaluasi tren data pengguna secara konkret dan mendalam.
+   - Jawab secara jelas dan terstruktur dalam Bahasa Indonesia yang lugas dan profesional, dengan tetap menjaga kesantunan dan kehangatan khas asisten Dayak Ma'anyan.`;
 
-  return `Anda adalah Model Bahasa & Asisten AI Cerdas Bahasa Dayak Ma'anyan (Kalimantan Tengah / Barito Timur).
+  return `Anda adalah Model Bahasa & Asisten AI Cerdas Berwawasan Luas & Spesialis Bahasa Dayak Ma'anyan (Kalimantan Tengah / Barito Timur).
 
 ${modeInstruction}
+
+=== PEDOMAN KECERDASAN, ANALISIS DATA & KONSULTASI (SANGAT PENTING) ===
+- Anda memiliki pemahaman logika, matematika, analitik data, dan literasi keuangan yang kuat.
+- Jika pengguna meminta analisis dari tren data, perhitungan dana darurat, alokasi anggaran bulanan, atau konsultasi bisnis/finansial:
+  1. ANALISIS SECARA DETAIL: Telaah data angka, pendapatan, pengeluaran, atau tren yang didiskusikan sebelumnya di riwayat obrolan.
+  2. BERIKAN REKOMENDASI NYATA: Hitung nominal realistis yang bisa disisihkan per bulan (misal: selisih surplus kas, aturan 50/30/20, target dana darurat 3-6 bulan pengeluaran rutin, dan simulasi waktu pencapaian target).
+  3. DILARANG MEMBERIKAN JAWABAN TEMPLATE: Jangan gunakan jawaban template generik / sapaan kaku yang mengabaikan inti pertanyaan analisis pengguna.
+  4. SAJIKAN DENGAN STRUKTUR RAPI: Gunakan poin-poin, rincian hitungan, dan rekomendasi aksi nyata.
 
 === PANDUAN KOSAKATA PILIHAN ===
 ${coreVocabStr}
@@ -367,7 +379,7 @@ ${learnedRulesStr}
 - Sambungkan konteks percakapan sebelumnya secara alami dan koheren.
 - JANGAN MENGULANG perkenalan diri (seperti "Kaiyat!", "Ngaran ku asisten AI...", "Tabe salamat...") atau menanyakan nama kembali jika sedang berada dalam percakapan lanjutan (follow-up).
 - Jika pengguna bertanya kelanjutan cerita atau menanyakan hal terkait respon sebelumnya (misal: "lalu?", "ceritakan lagi", "lanjut", "kaawe tanuhuini lanjut leh"), langsung lanjutkan cerita dengan runtut dan mengalir.
-- TUNTASKAN KALIMAT: Selalu selesaikan cerita, paragraf, atau kalimat hingga tuntas dan lengkap beserta terjemahannya. JANGAN PERNAH memotong respon di tengah kalimat.
+- TUNTASKAN KALIMAT: Selalu selesaikan cerita, paragraf, analisis, atau kalimat hingga tuntas dan lengkap. JANGAN PERNAH memotong respon di tengah kalimat.
 - Gunakan kosakata yang telah diajarkan pengguna di atas (seperti atei = hati, kataru = mengerti) secara konsisten dan akurat.
 - Jika diminta bercerita atau dongeng (misal: tanuhui, cerita rakyat Dayak, Cinderella, Palanuk), sajikan cerita yang kaya dan hidup dengan penutupan yang rapi.`.trim();
 }
@@ -525,13 +537,13 @@ app.post("/api/chat", async (req, res) => {
     // 4. Generate balasan dengan dynamic system instruction
     const systemInstruction = buildSystemInstruction(mode as "chat" | "latihan", message);
 
-    // Format & compact history (simpan riwayat percakapan hingga 6 giliran agar obrolan nyambung)
+    // Format & compact history (simpan riwayat percakapan hingga 20 giliran agar obrolan & data nyambung tuntas)
     const contents: any[] = [];
     if (Array.isArray(history)) {
-      for (const item of history.slice(-6)) {
+      for (const item of history.slice(-20)) {
         let text = (item.text || "").trim();
-        if (item.role !== "user" && text.length > 800) {
-          text = text.substring(0, 800) + "...";
+        if (item.role !== "user" && text.length > 4000) {
+          text = text.substring(0, 4000) + "...";
         }
         contents.push({
           role: item.role === "user" ? "user" : "model",
@@ -545,10 +557,12 @@ app.post("/api/chat", async (req, res) => {
     });
 
     const isStory = /cerita|dongeng|tanuhui|kisah|cinderella|palanuk|lanjut|hikayat/i.test(message);
+    const isAnalytical = /dana darurat|keuangan|uang|data|tren|persen|hitung|kalkulasi|berapa|gaji|pengeluaran|pemasukan|simulasi|alokasi|anggaran|investasi|tabungan|finansial|budget/i.test(message);
+    
     const response = await generateGeminiContent(contents, {
       systemInstruction: systemInstruction,
-      temperature: mode === "chat" ? 0.7 : 0.4,
-      maxOutputTokens: isStory ? 2500 : (mode === "chat" ? 1500 : 1000)
+      temperature: mode === "chat" ? (isAnalytical ? 0.3 : 0.7) : 0.4,
+      maxOutputTokens: (isStory || isAnalytical) ? 2500 : (mode === "chat" ? 1500 : 1000)
     });
 
     const replyText = response.text || "Puang ka'itung... Maaf terjadi kendala jaringan.";

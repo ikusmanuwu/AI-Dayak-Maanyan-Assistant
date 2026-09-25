@@ -188,22 +188,31 @@ Tugas Utama Anda:
 """
     else:
         mode_instruction = """
-[MODE PERCAKAPAN: CHAT & ROLEPLAY PENUTUR ASLI]
+[MODE PERCAKAPAN: CHAT & ASISTEN CERDAS DAYAK MA'ANYAN]
 Tugas Utama Anda:
-1. Berperan sebagai warga atau sahabat asli Dayak Ma'anyan (Kalimantan Tengah / Barito Timur) yang ramah, santun, dan luwes.
-2. Selalu prioritaskan menjawab dalam kalimat bahasa Dayak Ma'anyan yang alami, menggunakan kosakata dan aturan yang tercatat di bawah.
-3. Di bawah kalimat bahasa Ma'anyan, sertakan terjemahan / glosarium bahasa Indonesia dalam tanda kutip atau kurung agar lawan bicara yang sedang belajar bisa mengerti konteksnya.
-4. Gunakan partikel khas dan kata penegas seperti 'tatu'u' (banget), 'daya/dagana' (karena), 'kude' (tetapi), 'nelang' (sambil), 'ta'ati' (sekarang).
-5. Ingat hirarki rasa lapar: 'layah' (lapar biasa), 'kalauan' (sangat lapar), 'hinut' (lapar lemas mau pingsan).
-6. Tanyakan nama atau kabari mereka jika relevan (misal: "Hie ngaran nu?").
+1. Berperan sebagai Asisten AI Cerdas dan Sahabat Penutur Asli Dayak Ma'anyan (Kalimantan Tengah / Barito Timur) yang ramah, santun, luwes, dan berwawasan luas.
+2. Jika percakapan bertema obrolan santai, bahasa, atau budaya Dayak Ma'anyan:
+   - Prioritaskan menjawab dalam kalimat bahasa Dayak Ma'anyan yang alami, menggunakan kosakata dan aturan yang tercatat di bawah.
+   - Di bawah kalimat bahasa Ma'anyan, sertakan terjemahan bahasa Indonesia dalam kurung/tanda kutip agar mudah dipahami.
+   - Gunakan partikel khas seperti: hang (di), ma (ke), tatu'u (sangat/banget), daya/dagana (karena), kude (tetapi), nelang (sambil), ta'ati (sekarang), haut (sudah), puang/ang (tidak).
+3. Jika percakapan berfokus pada diskusi khusus, analisis data, tren keuangan, perhitungan dana darurat (emergency fund), budgeting, simulasi angka, atau topik substantif lainnya:
+   - FOKUS UTAMA: Berikan analisis mendalam, terstruktur, dan solutif dengan perhitungan nominal atau rasio yang konkret berdasarkan tren data pengguna.
+   - Jawab secara jelas dan profesional dalam Bahasa Indonesia yang lugas, tanpa jawaban template generik.
 """
 
     # 4. Merangkai System Instruction Utuh
     system_prompt = f"""
-Anda adalah Model Bahasa & Asisten AI Cerdas Bahasa Dayak Ma'anyan (Kalimantan Tengah, Indonesia).
-Anda memiliki kecakapan linguistik tinggi, memahami ragam dialek, tata bahasa, dan budaya suku Dayak Ma'anyan.
+Anda adalah Model Bahasa & Asisten AI Cerdas Berwawasan Luas & Spesialis Bahasa Dayak Ma'anyan (Kalimantan Tengah, Indonesia).
+Anda memiliki pemikiran analitis tajam, logika matematika, serta kecakapan linguistik dan budaya Dayak Ma'anyan yang tinggi.
 
 {mode_instruction}
+
+=== PEDOMAN KECERDASAN, ANALISIS DATA & KONSULTASI (SANGAT PENTING) ===
+- Jika pengguna meminta analisis dari tren data, perhitungan dana darurat, alokasi anggaran bulanan, atau konsultasi bisnis/finansial:
+  1. ANALISIS SECARA DETAIL: Telaah data angka, pendapatan, pengeluaran, atau tren yang didiskusikan sebelumnya di riwayat obrolan.
+  2. BERIKAN REKOMENDASI NYATA: Hitung nominal realistis yang bisa disisihkan per bulan (misal: selisih surplus kas, aturan 50/30/20, target dana darurat 3-6 bulan pengeluaran rutin, dan simulasi waktu pencapaian target).
+  3. DILARANG MEMBERIKAN JAWABAN TEMPLATE: Jangan gunakan jawaban template generik / sapaan kaku yang mengabaikan inti pertanyaan analisis pengguna.
+  4. SAJIKAN DENGAN STRUKTUR RAPI: Gunakan poin-poin, rincian hitungan, dan rekomendasi aksi nyata.
 
 === KNOWLEDGE BASE INTI (PENGETAHUAN AWAL) ===
 [Kosakata Dasar & Ungkapan Autentik]:
@@ -220,7 +229,9 @@ Berikut adalah kosakata baru dan koreksi yang berhasil Anda pelajari langsung da
 {learned_rules_str}
 
 === PEDOMAN PENTING ===
-- Selalu patuhi pengetahuan di atas sebagai standar kebenaran utama.
+- Sambungkan konteks percakapan sebelumnya secara koheren dan utuh.
+- JANGAN mengulang perkenalan diri jika sedang berada dalam percakapan lanjutan.
+- Selalu selesaikan analisis, cerita, dan kalimat hingga tuntas tanpa terpotong.
 - Jika pengguna mengoreksi atau mengajarkan istilah baru di tengah percakapan, tanggapi dengan rasa terima kasih dan adaptif terhadap koreksi tersebut.
 - Tetap bersahabat, sopan, dan lestarikan keaslian bahasa Dayak Ma'anyan.
 """
@@ -359,14 +370,14 @@ def generate_maanyan_response(
     client = get_genai_client()
     system_instruction = build_dynamic_system_instruction(mode=mode, user_message=user_message)
 
-    # Format & compact riwayat percakapan (simpan 4-6 terakhir)
+    # Format & compact riwayat percakapan (simpan hingga 20 giliran agar konteks & data utuh)
     contents = []
     if chat_history:
-        for msg in chat_history[-6:]:
+        for msg in chat_history[-20:]:
             role = "user" if msg.get("role") == "user" else "model"
             text = (msg.get("text") or "").strip()
-            if role != "user" and len(text) > 800:
-                text = text[:800] + "..."
+            if role != "user" and len(text) > 4000:
+                text = text[:4000] + "..."
             contents.append(types.Content(
                 role=role,
                 parts=[types.Part.from_text(text=text)]
@@ -379,7 +390,13 @@ def generate_maanyan_response(
     ))
 
     is_story = any(k in user_message.lower() for k in ["cerita", "dongeng", "tanuhui", "kisah", "cinderella", "palanuk", "lanjut", "hikayat"])
-    max_tokens = 2500 if is_story else (1500 if mode == "chat" else 1000)
+    is_analytical = any(k in user_message.lower() for k in [
+        "dana darurat", "keuangan", "uang", "data", "tren", "persen", "hitung",
+        "kalkulasi", "berapa", "gaji", "pengeluaran", "pemasukan", "simulasi",
+        "alokasi", "anggaran", "investasi", "tabungan", "finansial", "budget"
+    ])
+    max_tokens = 2500 if (is_story or is_analytical) else (1500 if mode == "chat" else 1000)
+    temp = (0.3 if is_analytical else 0.7) if mode == "chat" else 0.4
 
     last_error = None
     for model_name in DEFAULT_MODELS:
@@ -389,7 +406,7 @@ def generate_maanyan_response(
                 contents=contents,
                 config=types.GenerateContentConfig(
                     system_instruction=system_instruction,
-                    temperature=0.7 if mode == "chat" else 0.4,
+                    temperature=temp,
                     max_output_tokens=max_tokens
                 )
             )

@@ -180,10 +180,10 @@ export async function startTelegramPoller(
               }
 
               let history = userChatHistories.get(chatId) || [];
-              // Auto-reset jika obrolan terakhir sudah lebih dari 10 menit
+              // Auto-reset jika obrolan terakhir sudah lebih dari 24 jam tidak aktif
               if (history.length > 0) {
                 const lastMsg = history[history.length - 1];
-                if (Date.now() - lastMsg.timestamp > 10 * 60 * 1000) {
+                if (Date.now() - lastMsg.timestamp > 24 * 60 * 60 * 1000) {
                   userChatHistories.delete(chatId);
                   history = [];
                 }
@@ -254,10 +254,13 @@ export async function startTelegramPoller(
                 // Tampilkan indikator status "sedang mengetik..." di Telegram
                 sendChatAction(token, chatId, "typing").catch(() => {});
 
-                // Format riwayat percakapan agar obrolan nyambung
+                // Format riwayat percakapan agar obrolan nyambung tuntas
                 const contents: any[] = [];
-                for (const item of history.slice(-6)) {
+                for (const item of history.slice(-20)) {
                   let textPart = item.text.trim();
+                  if (item.role !== "user" && textPart.length > 4000) {
+                    textPart = textPart.substring(0, 4000) + "...";
+                  }
                   contents.push({
                     role: item.role === "user" ? "user" : "model",
                     parts: [{ text: textPart }]
@@ -269,11 +272,13 @@ export async function startTelegramPoller(
                 });
 
                 const isStory = /cerita|dongeng|tanuhui|kisah|cinderella|palanuk|lanjut|hikayat/i.test(text);
+                const isAnalytical = /dana darurat|keuangan|uang|data|tren|persen|hitung|kalkulasi|berapa|gaji|pengeluaran|pemasukan|simulasi|alokasi|anggaran|investasi|tabungan|finansial|budget/i.test(text);
                 const sysInstruction = buildSystemInstruction(mode, text);
+                
                 const aiResp = await callGemini(contents, {
                   systemInstruction: sysInstruction,
-                  temperature: mode === "chat" ? 0.7 : 0.4,
-                  maxOutputTokens: isStory ? 2500 : (mode === "chat" ? 1500 : 1000)
+                  temperature: mode === "chat" ? (isAnalytical ? 0.3 : 0.7) : 0.4,
+                  maxOutputTokens: (isStory || isAnalytical) ? 2500 : (mode === "chat" ? 1500 : 1000)
                 });
 
                 const replyText = aiResp.text || "Puang ka'itung... Maaf bot sedang berpikir.";
@@ -288,7 +293,7 @@ export async function startTelegramPoller(
                   // Simpan riwayat chat pengguna agar follow-up chat nyambung terus
                   history.push({ role: "user", text, timestamp: Date.now() });
                   history.push({ role: "model", text: replyText, timestamp: Date.now() });
-                  userChatHistories.set(chatId, history.slice(-10));
+                  userChatHistories.set(chatId, history.slice(-20));
                 }
                 await sendTelegramMessage(token, chatId, replyText);
               } catch (err: any) {
