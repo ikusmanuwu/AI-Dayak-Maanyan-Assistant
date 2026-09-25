@@ -785,13 +785,8 @@ async function startServer() {
     process.env.K_SERVICE && process.env.K_SERVICE.includes("ais-dev") && !isRailway
   );
   
-  // Di Railway, Production, atau server mandiri: Poller selalu otomatis aktif
-  const shouldAutoStartPoller = !isExplicitlyDisabled && (
-    isRailway ||
-    isProduction ||
-    isExplicitlyEnabled ||
-    !isAiStudioDevPreview
-  );
+  // Poller selalu otomatis aktif jika token tersedia
+  const shouldAutoStartPoller = !isExplicitlyDisabled;
 
   if (tgToken) {
     console.log("[Telegram] Memverifikasi token Telegram Bot...");
@@ -799,10 +794,8 @@ async function startServer() {
       if (res.success) {
         console.log(`[Telegram] Bot Terhubung sebagai @${res.bot.username} (${res.bot.first_name})`);
         if (shouldAutoStartPoller) {
-          console.log(`[Telegram] Menjalankan Telegram Long Poller (Platform: ${isRailway ? 'Railway' : isProduction ? 'Production' : 'Standalone Server'})...`);
+          console.log("[Telegram] Menjalankan Telegram Long Poller...");
           launchTelegramPoller(tgToken);
-        } else {
-          console.log("[Telegram] AI Studio dev preview terdeteksi. Poller default standby agar tidak bentrok dengan instance Railway. Anda bisa menyalakan poller kapan saja dari tombol di Web UI Dashboard atau set ENABLE_TELEGRAM_POLLER=true.");
         }
       } else {
         console.error("[Telegram] Gagal verifikasi token:", res.error);
