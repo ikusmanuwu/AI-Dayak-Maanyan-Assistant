@@ -42,7 +42,10 @@ from database import (
     get_all_learned_rules,
     search_vocab,
     get_stats,
-    reset_all_learned
+    reset_all_learned,
+    record_transaction,
+    get_active_salary_budget_period,
+    get_budget_status_summary
 )
 from knowledge_base import CORE_VOCABULARY
 from gemini_brain import (
@@ -225,6 +228,40 @@ async def memori_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lines.append("\n✨ _Seluruh memori ini disuntikkan secara dinamis ke instruksi Gemini setiap kali bot merespon!_")
     await update.message.reply_text("\n".join(lines), parse_mode=constants.ParseMode.MARKDOWN)
 
+async def anggaran_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handler untuk perintah /anggaran atau /budget."""
+    summary = get_budget_status_summary()
+    period = summary["period_info"]
+    start_fmt = period["start_date"].strftime("%d %b")
+    end_fmt = period["end_date"].strftime("%d %b") if period.get("end_date") else "Seterusnya"
+
+    # Format output persis sesuai UI CatatDuit
+    lines = [
+        "💰 *Status Anggaran Keluarga:*",
+        f"*{period['label']}*",
+        f"🗓 _Aturan Cut-off: Transaksi mulai tanggal {period['start_date'].day} ({start_fmt}) langsung membuka periode baru._",
+        "",
+        "📈 *Total Realisasi Periode Ini:*",
+        f"Rp {int(summary['total_spent']):,} / Rp {int(summary['total_limit']):,} ({summary['overall_percentage']:.0f}%)",
+        "🛡 *Sisa Kuota Anggaran:*",
+        f"Rp {int(summary['remaining_total']):,} ({summary['total_trx']} transaksi)",
+        "",
+        "*Rincian Kategori:*"
+    ]
+
+    for cat in summary["category_details"]:
+        icon = "🟢" if cat["percentage"] < 80 else ("🟡" if cat["percentage"] < 100 else "🔴")
+        lines.append(
+            f"{icon} *{cat['category']}:* {cat['percentage']:.0f}% (Terpakai Rp {int(cat['spent']):,} / Limit Rp {int(cat['limit']):,}) [Sisa Rp {int(cat['remaining']):,}]"
+        )
+
+    lines.extend([
+        "",
+        "_Keterangan: 🟢 Aman (<80%) | 🟡 Waspada (≥80%) | 🔴 Over-Limit (≥100%)_"
+    ])
+
+    await update.message.reply_text("\n".join(lines), parse_mode=constants.ParseMode.MARKDOWN)
+
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler statistik bot."""
     stats = get_stats()
@@ -377,6 +414,8 @@ def main():
     app.add_handler(CommandHandler("latihan", set_latihan_mode))
     app.add_handler(CommandHandler("kamus", kamus_command))
     app.add_handler(CommandHandler("memori", memori_command))
+    app.add_handler(CommandHandler("anggaran", anggaran_command))
+    app.add_handler(CommandHandler("budget", anggaran_command))
     app.add_handler(CommandHandler("stats", stats_command))
 
     # Daftarkan Callback Query Handler (tombol inline)

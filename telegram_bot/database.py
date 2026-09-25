@@ -48,6 +48,46 @@ def init_db():
             )
         """)
 
+        # Tabel transaksi keuangan (Pemasukan & Pengeluaran)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                username TEXT,
+                type TEXT NOT NULL, -- 'income' atau 'expense'
+                amount REAL NOT NULL,
+                category TEXT NOT NULL,
+                notes TEXT,
+                transaction_date DATE NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Tabel batas anggaran per kategori
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS budget_limits (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category TEXT NOT NULL UNIQUE,
+                monthly_limit REAL NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Inisialisasi limit anggaran default keluarga jika masih kosong
+        cursor.execute("SELECT COUNT(*) as cnt FROM budget_limits")
+        if cursor.fetchone()["cnt"] == 0:
+            default_limits = [
+                ("Apartemen", 6500000),
+                ("Makan & Belanja", 5000000),
+                ("Transport & Bensin", 2000000),
+                ("Tagihan & Listrik", 1500000),
+                ("Hiburan & Liburan", 2000000),
+                ("Keluarga & Orang Tua", 2500000),
+                ("Lain-lain", 2300000)
+            ]
+            for cat, lim in default_limits:
+                cursor.execute("INSERT OR IGNORE INTO budget_limits (category, monthly_limit) VALUES (?, ?)", (cat, lim))
+
         # Tabel sesi pengguna (Mode Percakapan & Status Latihan)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS user_sessions (
@@ -186,6 +226,136 @@ def reset_all_learned():
         cursor.execute("DELETE FROM learned_vocab")
         cursor.execute("DELETE FROM learned_rules")
         conn.commit()
+
+def record_transaction(
+    user_id: int,
+    username: str,
+    trx_type: str,
+    amount: float,
+    category: str,
+    notes: str = "",
+    transaction_date: Optional[str] = None
+) -> int:
+    """Mencatat transaksi pemasukan / pengeluaran ke database."""
+    if not transaction_date:
+        transaction_date = datetime.now().strftime("%Y-%m-%d")
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO transactions (user_id, username, type, amount, category, notes, transaction_date, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        """, (user_id, username, trx_type.lower(), amount, category.strip(), notes.strip(), transaction_date))
+        conn.commit()
+        return cursor.lastrowid
+
+def get_active_salary_budget_period() -> Dict[str, Any]:
+    """
+    Menentukan rentang periode anggaran aktif secara dinamis berdasarkan 
+    transaksi GAJIAN terakhir yang tercatat di database.
+    """
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        
+        # 1. Cari transaksi gaji terakhir
+        cursor.execute("""
+            SELECT transaction_date, amount, notes
+            FROM transactions
+            WHERE type = 'income'
+              AND (LOWER(category) LIKE '%gaji%' OR LOWER(notes) LIKE '%gaji%')
+            ORDER BY transaction_date DESC, id DESC
+            LIMIT 1
+        """)
+        row = cursor.fetchone()
+        
+        today = datetime.now().date()
+        
+        if row:
+            trx_str = row["transaction_date"]
+            start_date = datetime.strptime(trx_str, "%Y-%m-%d").date() if isinstance(trx_str, str) else trx_str
+        else:
+            # Jika belum ada catatan gaji, gunakan awal bulan ini
+            start_date = datetime(today.year, today.month, 1).date()
+
+        nama_bulan = ["", "Januari", "Februari", "Maret", "April", "Mei", "Juni", 
+                      "Juli", "Agustus", "September", "Oktober", "November", "Desember"]
+        
+        # Jika gajian diterima mulai tanggal 20 ke atas, alokasikan untuk label nama bulan berikutnya
+        if start_date.day >= 20:
+            next_m = 1 if start_date.month == 12 else start_date.month + 1
+            year_val = start_date.year + 1 if start_date.month == 12 else start_date.year
+            period_name = f"{nama_bulan[next_m]} {year_val}"
+            # Estimasi rentang s.d. tanggal sehari sebelum gajian bulan depan
+            end_date = datetime(year_val, next_m, start_date.day - 1).date() if start_date.day > 1 else start_date
+        else:
+            period_name = f"{nama_bulan[start_date.month]} {start_date.year}"
+            end_date = start_date
+
+        return {
+            "start_date": start_date, # Hari H gajian diterima (Langsung aktif!)
+            "end_date": end_date,
+            "period_name": period_name,
+            "label": f"Periode {period_name} (Mulai {start_date.strftime('%d %b %Y')} - Gajian Selanjutnya)"
+        }
+
+def get_budget_status_summary() -> Dict[str, Any]:
+    """Mengambil ringkasan realisasi anggaran periode aktif vs limit kategori."""
+    period_info = get_active_salary_budget_period()
+    start_date_str = period_info["start_date"].strftime("%Y-%m-%d")
+
+    with get_connection() as conn:
+        cursor = conn.cursor()
+
+        # Ambil semua limit kategori
+        cursor.execute("SELECT category, monthly_limit FROM budget_limits ORDER BY monthly_limit DESC")
+        limits = {r["category"]: float(r["monthly_limit"]) for r in cursor.fetchall()}
+        total_limit = sum(limits.values())
+
+        # Ambil total pengeluaran per kategori sejak start_date
+        cursor.execute("""
+            SELECT category, SUM(amount) as total_spent, COUNT(id) as trx_count
+            FROM transactions
+            WHERE type = 'expense'
+              AND transaction_date >= ?
+            GROUP BY category
+        """, (start_date_str,))
+        spent_rows = cursor.fetchall()
+
+        spent_map = {}
+        total_spent = 0.0
+        total_trx = 0
+        for r in spent_rows:
+            cat = r["category"]
+            amt = float(r["total_spent"])
+            cnt = int(r["trx_count"])
+            spent_map[cat] = amt
+            total_spent += amt
+            total_trx += cnt
+
+        category_details = []
+        for cat, limit in limits.items():
+            spent = spent_map.get(cat, 0.0)
+            pct = (spent / limit * 100) if limit > 0 else 0
+            remaining = limit - spent
+            category_details.append({
+                "category": cat,
+                "spent": spent,
+                "limit": limit,
+                "percentage": pct,
+                "remaining": remaining
+            })
+
+        remaining_total = total_limit - total_spent
+        overall_pct = (total_spent / total_limit * 100) if total_limit > 0 else 0
+
+        return {
+            "period_info": period_info,
+            "total_spent": total_spent,
+            "total_limit": total_limit,
+            "remaining_total": remaining_total,
+            "overall_percentage": overall_pct,
+            "total_trx": total_trx,
+            "category_details": category_details
+        }
 
 # Inisialisasi otomatis saat modul diimpor
 init_db()

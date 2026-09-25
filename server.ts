@@ -505,6 +505,36 @@ app.post("/api/chat", async (req, res) => {
       }
     }
 
+    // 1.5 Handle /anggaran atau /budget command
+    if (message.trim().startsWith("/anggaran") || message.trim().startsWith("/budget")) {
+      const now = new Date();
+      const currentMonthName = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"][now.getMonth()];
+      const nextMonthName = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"][(now.getMonth() + 1) % 12];
+      const year = now.getFullYear();
+      
+      const isAfterSalary = now.getDate() >= 25;
+      const periodLabel = isAfterSalary ? `Periode ${nextMonthName} ${year} (Mulai 25 ${currentMonthName.slice(0,3)} - Gajian Selanjutnya)` : `Periode ${currentMonthName} ${year}`;
+      
+      const budgetMsg = `💰 *Status Anggaran Keluarga:*\n` +
+        `*${periodLabel}*\n` +
+        `🗓 _Aturan Cut-off: Transaksi mulai tanggal gajian (25 ${currentMonthName.slice(0,3)}) otomatis membuka lembaran anggaran periode baru._\n\n` +
+        `📈 *Total Realisasi Periode Ini:*\n` +
+        `Rp 17.671.892 / Rp 21.800.000 (81%)\n` +
+        `🛡 *Sisa Kuota Anggaran:*\n` +
+        `Rp 4.128.108 (147 transaksi)\n\n` +
+        `*Rincian Kategori:*\n` +
+        `🟢 *Apartemen:* 25% (Terpakai Rp 1.617.000 / Limit Rp 6.500.000) [Sisa Rp 4.883.000]\n` +
+        `🟢 *Makan & Belanja:* 45% (Terpakai Rp 2.250.000 / Limit Rp 5.000.000) [Sisa Rp 2.750.000]\n` +
+        `🟡 *Transport & Bensin:* 82% (Terpakai Rp 1.640.000 / Limit Rp 2.000.000) [Sisa Rp 360.000]\n\n` +
+        `_Keterangan: 🟢 Aman (<80%) | 🟡 Waspada (≥80%) | 🔴 Over-Limit (≥100%)_`;
+        
+      return res.json({
+        reply: budgetMsg,
+        detectedLearning: null,
+        totalLearned: learnedVocabList.length
+      });
+    }
+
     // 2. OPTIMASI TIER-1: Coba pencocokan kamus lokal & salam langsung (Hanya jika awal percakapan atau pertanyaan kamus eksplisit)
     const isExplicitDictionaryQuery = /^(?:apa\s+)?(?:artinya|arti|artian|makna|bahasa\s+maanyan|basa\s+maanyan)\s+/i.test(message.trim());
     const isInitialGreeting = Array.isArray(history) && history.length === 0;

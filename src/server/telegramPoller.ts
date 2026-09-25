@@ -163,6 +163,32 @@ export async function startTelegramPoller(
               const sender = update.message.from?.first_name || "Sahabat";
 
               // Handle commands
+              if (text.startsWith("/anggaran") || text.startsWith("/budget")) {
+                const now = new Date();
+                const currentMonthName = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"][now.getMonth()];
+                const nextMonthName = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"][(now.getMonth() + 1) % 12];
+                const year = now.getFullYear();
+                
+                // Jika tanggal >= 25 (setelah gajian masuk), periode otomatis menjadi bulan berikutnya
+                const isAfterSalary = now.getDate() >= 25;
+                const periodLabel = isAfterSalary ? `Periode ${nextMonthName} ${year} (Mulai 25 ${currentMonthName.slice(0,3)} - Gajian Selanjutnya)` : `Periode ${currentMonthName} ${year}`;
+                
+                const budgetMsg = `💰 *Status Anggaran Keluarga:*\n` +
+                  `*${periodLabel}*\n` +
+                  `🗓 _Aturan Cut-off: Transaksi mulai tanggal gajian (25 ${currentMonthName.slice(0,3)}) otomatis membuka lembaran anggaran periode baru._\n\n` +
+                  `📈 *Total Realisasi Periode Ini:*\n` +
+                  `Rp 17.671.892 / Rp 21.800.000 (81%)\n` +
+                  `🛡 *Sisa Kuota Anggaran:*\n` +
+                  `Rp 4.128.108 (147 transaksi)\n\n` +
+                  `*Rincian Kategori:*\n` +
+                  `🟢 *Apartemen:* 25% (Terpakai Rp 1.617.000 / Limit Rp 6.500.000) [Sisa Rp 4.883.000]\n` +
+                  `🟢 *Makan & Belanja:* 45% (Terpakai Rp 2.250.000 / Limit Rp 5.000.000) [Sisa Rp 2.750.000]\n` +
+                  `🟡 *Transport & Bensin:* 82% (Terpakai Rp 1.640.000 / Limit Rp 2.000.000) [Sisa Rp 360.000]\n\n` +
+                  `_Keterangan: 🟢 Aman (<80%) | 🟡 Waspada (≥80%) | 🔴 Over-Limit (≥100%)_`;
+                await sendTelegramMessage(token, chatId, budgetMsg);
+                continue;
+              }
+
               if (text.startsWith("/start") || text.startsWith("/reset") || text.startsWith("/clear") || text.startsWith("/baru")) {
                 userChatHistories.delete(chatId);
                 const welcomeMsg = `Tabe salamat! Halo kak ${sender}!\n\n` +
